@@ -31,7 +31,7 @@
 #include "Input.h"
 #include "Pet.h"
 #include "Features.h"
-#include "../UI.h"
+#include "UI.h"
 
 TinyScreen display = TinyScreen(TinyScreenPlus);
 ButtonInput buttons;
