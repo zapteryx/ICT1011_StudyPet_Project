@@ -5,13 +5,13 @@
 ## Files
 | File | Role |
 |---|---|
-| `StudyPet_TinyScreenPlus.ino` | setup/loop; wires the state machine (input → features → pet → draw) |
-| `Input.h` | **pin definitions**, button → Up/Down/Back/Select mapping (short / long / repeat), IR presence sensor |
-| `Features.h` | buzzer patterns, software clock, break timer, study tracker, deadline CRUD + reminders, settings |
-| `Pet.h` | 6 species × 3 colours, idle + interactive animation state (no drawing) |
-| `UI.h` | home screen, full-screen menu stack (max 4 rows), editors, dashboard, alert pop-up, pet sprite renderer |
+| `StudyPet_TinyScreenPlus/StudyPet_TinyScreenPlus.ino` | setup/loop; wires the state machine (input → features → pet → draw) |
+| `StudyPet_TinyScreenPlus/Input.h` | **pin definitions**, button → Up/Down/Back/Select mapping (short / long / repeat), IR presence sensor |
+| `StudyPet_TinyScreenPlus/Features.h` | buzzer patterns, software clock, break timer, study tracker, deadline CRUD + reminders, settings |
+| `StudyPet_TinyScreenPlus/Pet.h` | 6 species × 3 colours, idle + interactive animation state (no drawing) |
+| `StudyPet_TinyScreenPlus/UI.h` | home screen, full-screen menu stack (max 4 rows), editors, dashboard, alert pop-up, pet sprite renderer |
 
-## Wiring (defaults — change at the top of `Input.h`)
+## Wiring (defaults — change at the top of `StudyPet_TinyScreenPlus/Input.h`)
 | Part | Pin | Notes |
 |---|---|---|
 | Buzzer / piezo | `A0` | `BUZZER_PASSIVE 1` = passive piezo via `tone()`; `0` = active buzzer |
@@ -36,7 +36,7 @@ Top Right = **Up** · Bottom Right = **Down** · Top Left = **Back** · Bottom L
 - **Deadlines:** create / view / edit / delete up to 8. Per-deadline reminder window (at due … 1 week before).
   Footer banner appears inside the window; full-screen pop-up + **long** beeps when it starts and when overdue,
   re-alerting every 15/30/60 min until acknowledged (Settings).
-- **Study tracker:** per-subject totals, live session time, dashboard with bars. Edit `SUBJECT_NAMES` in `Features.h`.
+- **Study tracker:** per-subject totals, live session time, dashboard with bars. Edit `SUBJECT_NAMES` in `StudyPet_TinyScreenPlus/Features.h`.
 - **IR presence:** away after 10 s – 5 min without detection (PIR detects *motion*, so 1–2 min suits a still student);
   resumes the instant you're detected. Settings > "IR now" shows the raw sensor reading for wiring checks.
 
