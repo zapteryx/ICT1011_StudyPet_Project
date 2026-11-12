@@ -18,7 +18,7 @@
 //     hold BACK              -> start / pause break timer
 //     hold UP                -> start / stop study session
 //     hold DOWN              -> hours dashboard
-//   MENU STACK (full screen, max 4 rows visible)
+//   MENU STACK (three rows + persistent physical button labels)
 //     UP / DOWN move, SELECT open, BACK return, hold BACK = home
 //   ALERT pop-up (deadline) is pushed on top of ANY screen and
 //     returns to exactly where you were when dismissed.
@@ -26,7 +26,7 @@
 enum Screen : uint8_t {
   SCR_HOME = 0, SCR_MAIN, SCR_TIMER, SCR_STUDY, SCR_SUBJECTS, SCR_DASH,
   SCR_DEADLINES, SCR_DL_EDIT, SCR_PET, SCR_PET_PICK, SCR_SETTINGS,
-  SCR_VALUE, SCR_DATETIME, SCR_CONFIRM, SCR_ALERT
+  SCR_VALUE, SCR_DATETIME, SCR_CONFIRM, SCR_ALERT, SCR_GUIDE
 };
 
 enum ValueTarget : uint8_t {
@@ -58,9 +58,8 @@ struct MenuFrame {
 
 class StudyPetUI {
 public:
-  void begin(TinyScreen &d, unsigned long now) {
+  void begin(TinyScreen &d, unsigned long /*now*/) {
     depth_ = 0;
-    bootAt_ = now;
     needClear_ = true;
     appliedBrightness_ = 255;
     toastAt_ = 0;
@@ -81,6 +80,7 @@ public:
       case SCR_DATETIME: dateInput(ev, f, now); break;
       case SCR_PET_PICK: petPickInput(ev, pet); break;
       case SCR_DASH: dashInput(ev); break;
+      case SCR_GUIDE: guideInput(ev); break;
       case SCR_ALERT:
         if ((ev.key == KEY_SELECT || ev.key == KEY_BACK) && ev.type == PRESS_SHORT) {
           f.deadlines.acknowledge(alertIndex_);
@@ -129,14 +129,15 @@ public:
       case SCR_DATETIME: drawDate(d); break;
       case SCR_PET_PICK: drawPetPick(d, pet, now); break;
       case SCR_ALERT: drawAlert(d, f); break;
+      case SCR_GUIDE: drawGuide(d); break;
       default: drawList(d, pet, f); break;
     }
   }
 
 private:
   // ---- layout ----
-  static const uint8_t ROWS = 4;  // max menu options visible at once
-  static const uint8_t TEXT_MAX = 20;
+  static const uint8_t ROWS = 3;  // reserve the bottom 11 px for button labels
+  static const uint8_t TEXT_MAX = 32;
   static const uint8_t SLOTS = 8;
   static const uint8_t PET_X = 26;
   static const uint8_t PET_Y = 12;
@@ -154,7 +155,6 @@ private:
   uint8_t depth_ = 0;
   bool needClear_ = true;
   unsigned long lastDraw_ = 0;
-  unsigned long bootAt_ = 0;
   uint8_t appliedBrightness_ = 255;
   LineCache cache_[SLOTS];
   uint16_t sigLeft_ = 0xFFFF, sigRight_ = 0xFFFF, sigScroll_ = 0xFFFF;
@@ -189,6 +189,7 @@ private:
   bool pickPalette_ = false;
   uint8_t pickValue_ = 0;
   uint8_t dashTop_ = 0;
+  uint8_t guidePage_ = 0;
   NavKey swallowKey_ = KEY_NONE;
 
   // ------------------------------------------------------------------
@@ -204,6 +205,7 @@ private:
     stack_[depth_].top = 0;
     depth_++;
     if (s == SCR_DASH) dashTop_ = 0;
+    if (s == SCR_GUIDE) guidePage_ = 0;
     needClear_ = true;
   }
   void pop() {
@@ -253,11 +255,97 @@ private:
     char clipped[TEXT_MAX];
     strncpy(clipped, text, TEXT_MAX - 1);
     clipped[TEXT_MAX - 1] = 0;
+    // Clip by pixels too: character count alone can overwrite adjacent panels.
+    size_t len = strlen(clipped);
+    while (len && d.getPrintWidth(clipped) > w - 4) clipped[--len] = 0;
     d.print(clipped);
-    strncpy(c.text, clipped, TEXT_MAX);
+    strncpy(c.text, text, TEXT_MAX - 1);
+    c.text[TEXT_MAX - 1] = 0;
     c.fg = fg;
     c.bg = bg;
     c.valid = true;
+  }
+
+  // Fixed 3x5 capitals keep physical button labels readable in eleven pixels.
+  // The main content keeps the larger TinyScreen font.
+  static uint16_t smallGlyph(char ch) {
+#define GLYPH(a,b,c,d,e) ((a << 12) | (b << 9) | (c << 6) | (d << 3) | e)
+    static const uint16_t glyphs[] = {
+      GLYPH(2,5,7,5,5), GLYPH(6,5,6,5,6), GLYPH(3,4,4,4,3), // ABC
+      GLYPH(6,5,5,5,6), GLYPH(7,4,6,4,7), GLYPH(7,4,6,4,4), // DEF
+      GLYPH(3,4,5,5,3), GLYPH(5,5,7,5,5), GLYPH(7,2,2,2,7), // GHI
+      GLYPH(1,1,1,5,2), GLYPH(5,5,6,5,5), GLYPH(4,4,4,4,7), // JKL
+      GLYPH(5,7,7,5,5), GLYPH(5,7,7,7,5), GLYPH(2,5,5,5,2), // MNO
+      GLYPH(6,5,6,4,4), GLYPH(2,5,5,7,3), GLYPH(6,5,6,5,5), // PQR
+      GLYPH(3,4,2,1,6), GLYPH(7,2,2,2,2), GLYPH(5,5,5,5,7), // STU
+      GLYPH(5,5,5,5,2), GLYPH(5,5,7,7,5), GLYPH(5,5,2,5,5), // VWX
+      GLYPH(5,5,2,2,2), GLYPH(7,1,2,4,7),                   // YZ
+      GLYPH(7,5,5,5,7), GLYPH(2,6,2,2,7), GLYPH(6,1,2,4,7), // 012
+      GLYPH(6,1,2,1,6), GLYPH(5,5,7,1,1), GLYPH(7,4,6,1,6), // 345
+      GLYPH(3,4,6,5,2), GLYPH(7,1,2,2,2), GLYPH(2,5,2,5,2), // 678
+      GLYPH(2,5,3,1,6)                                      // 9
+    };
+    if (ch >= 'a' && ch <= 'z') ch -= 'a' - 'A';
+    if (ch >= 'A' && ch <= 'Z') return glyphs[ch - 'A'];
+    if (ch >= '0' && ch <= '9') return glyphs[26 + ch - '0'];
+    switch (ch) {
+      case ':': return GLYPH(0,2,0,2,0);
+      case '/': return GLYPH(1,1,2,4,4);
+      case '-': return GLYPH(0,0,7,0,0);
+      case '+': return GLYPH(0,2,7,2,0);
+      case '=': return GLYPH(0,7,0,7,0);
+      case '<': return GLYPH(1,2,4,2,1);
+      case '>': return GLYPH(4,2,1,2,4);
+      case '!': return GLYPH(2,2,2,0,2);
+      case '.': return GLYPH(0,0,0,0,2);
+      case ' ': return 0;
+      default: return GLYPH(6,1,2,0,2);
+    }
+#undef GLYPH
+  }
+
+  static void smallText(TinyScreen &d, uint8_t x, uint8_t y, const char *text,
+                        uint8_t color, uint8_t maxWidth = 96) {
+    const uint16_t end = (uint16_t)x + maxWidth;
+    for (; *text && x + 3 <= end && x + 3 <= 96; ++text, x += 4) {
+      const uint16_t bits = smallGlyph(*text);
+      for (uint8_t row = 0; row < 5; ++row)
+        for (uint8_t col = 0; col < 3; ++col)
+          if (bits & (1U << (14 - row * 3 - col))) d.drawPixel(x + col, y + row, color);
+    }
+  }
+
+  void smallLine(TinyScreen &d, uint8_t slot, uint8_t y, const char *text,
+                 uint8_t color = UI_TEXT) {
+    LineCache &c = cache_[slot];
+    if (c.valid && c.fg == color && strcmp(c.text, text) == 0) return;
+    d.drawRect(0, y, 96, 6, TSRectangleFilled, UI_BG);
+    smallText(d, 2, y, text, color, 92);
+    strncpy(c.text, text, TEXT_MAX - 1); c.text[TEXT_MAX - 1] = 0;
+    c.fg = color; c.valid = true;
+  }
+
+  void hintRow(TinyScreen &d, uint8_t slot, uint8_t y, const char *left, const char *right) {
+    char key[TEXT_MAX];
+    snprintf(key, sizeof key, "%s|%s", left, right);
+    LineCache &c = cache_[slot];
+    if (c.valid && strcmp(c.text, key) == 0) return;
+    d.drawRect(0, y, 96, 5, TSRectangleFilled, UI_TITLE);
+    smallText(d, 1, y, left, UI_TEXT, 46);
+    const uint8_t len = (uint8_t)strlen(right);
+    smallText(d, 96 - len * 4, y, right, UI_TEXT, 46);
+    strncpy(c.text, key, TEXT_MAX - 1); c.text[TEXT_MAX - 1] = 0; c.valid = true;
+  }
+
+  // A two-row map mirrors the four physical buttons. TL/TR = top left/right;
+  // BL/BR = bottom left/right. Each action label follows the current screen.
+  void controls(TinyScreen &d, const char *back, const char *up,
+                const char *select, const char *down) {
+    char tl[12], tr[12], bl[12], br[12];
+    snprintf(tl, sizeof tl, "TL %.8s", back); snprintf(tr, sizeof tr, "TR %.8s", up);
+    snprintf(bl, sizeof bl, "BL %.8s", select); snprintf(br, sizeof br, "BR %.8s", down);
+    hintRow(d, 6, 53, tl, tr);
+    hintRow(d, 7, 59, bl, br);
   }
 
   static void fmtClock(char *b, size_t n, uint32_t epoch) {
@@ -340,16 +428,26 @@ private:
     const BreakTimer &tm = f.timer;
     uint8_t hbg = UI_TITLE;
     if (tm.phase() == PHASE_IDLE) {
-      snprintf(b, sizeof b, "STUDYPET");
+      drawText(d, 0, 0, 0, 64, 12, "STUDYPET", UI_TEXT, hbg);
+      cache_[5].valid = false;
     } else {
       fmtMMSS(t, sizeof t, tm.remainingSeconds());
-      if (tm.userPaused()) { snprintf(b, sizeof b, "PAUSED %s", t); hbg = UI_PAUSE; }
-      else if (tm.awayHeld()) { snprintf(b, sizeof b, "AWAY %s", t); hbg = UI_PAUSE; }
-      else if (tm.phase() == PHASE_FOCUS) { snprintf(b, sizeof b, "FOCUS %s", t); hbg = UI_FOCUS; }
-      else if (tm.phase() == PHASE_SHORT_BREAK) { snprintf(b, sizeof b, "BREAK %s", t); hbg = UI_BREAK; }
-      else { snprintf(b, sizeof b, "LONG %s", t); hbg = UI_LONG; }
+      const char *state;
+      if (tm.userPaused()) { state = "PAUSE"; hbg = UI_PAUSE; }
+      else if (tm.awayHeld()) { state = "AWAY"; hbg = UI_PAUSE; }
+      else if (tm.phase() == PHASE_FOCUS) { state = "FOCUS"; hbg = UI_FOCUS; }
+      else if (tm.phase() == PHASE_SHORT_BREAK) { state = "BREAK"; hbg = UI_BREAK; }
+      else { state = "LONG"; hbg = UI_LONG; }
+      // Separate the small phase caption from the large digits so even a
+      // 180-minute custom countdown fits beside the wall clock in full.
+      LineCache &c = cache_[5];
+      if (!c.valid || c.bg != hbg || strcmp(c.text, state) != 0) {
+        d.drawRect(0, 0, 26, 12, TSRectangleFilled, hbg);
+        smallText(d, 2, 4, state, UI_TEXT, 23);
+        strncpy(c.text, state, TEXT_MAX); c.bg = hbg; c.valid = true;
+      }
+      drawText(d, 0, 26, 0, 38, 12, t, UI_TEXT, hbg);
     }
-    drawText(d, 0, 0, 0, 64, 12, b, UI_TEXT, hbg);
     fmtClock(t, sizeof t, f.nowEpoch());
     drawText(d, 1, 64, 0, 32, 12, t, UI_TEXT, hbg);
 
@@ -397,7 +495,7 @@ private:
       return;
     }
     if (session) {
-      if (f.study.awayPaused()) { snprintf(b, n, "Away - paused"); bg = UI_PAUSE; }
+      if (f.study.awayPaused()) { snprintf(b, n, "Away: IR paused"); bg = UI_PAUSE; }
       else {
         const uint32_t s = f.study.sessionSeconds();
         snprintf(b, n, "%s %lu:%02lu:%02lu", SUBJECT_NAMES[f.study.subject()], (unsigned long)(s / 3600UL),
@@ -406,20 +504,30 @@ private:
       }
       return;
     }
+    if (f.timer.awayHeld()) {
+      snprintf(b, n, "Check Settings > IR"); bg = UI_PAUSE;
+      return;
+    }
     bg = UI_BG;
-    if ((unsigned long)(now - bootAt_) < 15000UL || ((now / 6000UL) % 2UL) == 1)
-      snprintf(b, n, "Hold BL = menu");
-    else
-      snprintf(b, n, "%s says hi!", Pet::speciesName(pet.species()));
+    switch ((now / 4000UL) % 3UL) {
+      case 0: snprintf(b, n, "TR Jump / BR Nap"); break;
+      case 1: snprintf(b, n, "TL Wiggle BL Love"); break;
+      default: snprintf(b, n, "Menu: Button guide"); break;
+    }
   }
 
-  // Left column: focus-cycle dots. Right column: IR presence + session icon.
+  // Hold shortcuts sit beside the actual button positions, outside the sprite.
+  // Existing progress / presence / session indicators occupy the middle gap.
   void drawSideColumns(TinyScreen &d, FeatureManager &f) {
     const BreakTimer &tm = f.timer;
     const uint16_t sigL = (tm.phase() == PHASE_IDLE) ? 0
                           : (uint16_t)(1 + (tm.config().cycles << 8) + (tm.cycle() << 3) + tm.phase());
     if (sigL != sigLeft_) {
       d.drawRect(0, 12, 26, 41, TSRectangleFilled, UI_BG);
+      smallText(d, 2, 14, "HOLD", UI_DIM, 23);
+      smallText(d, 2, 21, "TIMER", UI_TEXT, 23);
+      smallText(d, 2, 36, "HOLD", UI_DIM, 23);
+      smallText(d, 2, 43, "MENU", C8(0, 7, 7), 23);
       if (tm.phase() != PHASE_IDLE) {
         const uint8_t n = tm.config().cycles > 8 ? 8 : tm.config().cycles;
         for (uint8_t i = 0; i < n; ++i) {
@@ -427,7 +535,7 @@ private:
           uint8_t c = C8(1, 1, 1);                                     // still to do
           if (num < tm.cycle() || (num == tm.cycle() && tm.onBreak())) c = C8(3, 1, 0);  // done
           else if (num == tm.cycle()) c = C8(3, 7, 0);                 // current focus
-          d.drawRect(7 + (i / 4) * 8, 17 + (i % 4) * 8, 5, 5, TSRectangleFilled, c);
+          d.drawRect(2 + (i % 8) * 3, 29, 2, 3, TSRectangleFilled, c);
         }
       }
       sigLeft_ = sigL;
@@ -438,14 +546,18 @@ private:
     const uint16_t sigR = (uint16_t)(1 | (ir << 1) | (present << 2) | (sess << 3) | (paused << 4));
     if (sigR != sigRight_) {
       d.drawRect(70, 12, 26, 41, TSRectangleFilled, UI_BG);
-      if (ir) d.drawRect(80, 17, 5, 5, TSRectangleFilled, present ? C8(0, 7, 0) : C8(1, 2, 2));
+      smallText(d, 74, 14, "HOLD", UI_DIM, 22);
+      smallText(d, 74, 21, "STUDY", UI_TEXT, 22);
+      smallText(d, 74, 36, "HOLD", UI_DIM, 22);
+      smallText(d, 74, 43, "HOURS", UI_TEXT, 22);
+      if (ir) d.drawRect(75, 29, 3, 3, TSRectangleFilled, present ? C8(0, 7, 0) : UI_DIM);
       if (sess) {
         const uint8_t c = paused ? C8(1, 2, 2) : C8(2, 6, 7);
-        d.drawRect(76, 29, 13, 10, TSRectangleNoFill, c);  // open book
-        d.drawLine(82, 29, 82, 38, c);
+        d.drawRect(83, 28, 9, 5, TSRectangleNoFill, c);  // open book
+        d.drawLine(87, 28, 87, 32, c);
         if (paused) {  // pause bars
-          d.drawRect(78, 42, 2, 6, TSRectangleFilled, C8(3, 7, 7));
-          d.drawRect(84, 42, 2, 6, TSRectangleFilled, C8(3, 7, 7));
+          d.drawRect(84, 29, 1, 3, TSRectangleFilled, UI_TEXT);
+          d.drawRect(89, 29, 1, 3, TSRectangleFilled, UI_TEXT);
         }
       }
       sigRight_ = sigR;
@@ -457,7 +569,7 @@ private:
   // ------------------------------------------------------------------
   uint8_t itemCount(Screen s, FeatureManager &f) const {
     switch (s) {
-      case SCR_MAIN: return 5;
+      case SCR_MAIN: return 6;
       case SCR_TIMER: return 8;
       case SCR_STUDY: return 3;
       case SCR_SUBJECTS: return SUBJECT_COUNT;
@@ -479,7 +591,9 @@ private:
         else {
           fmtMMSS(t, sizeof t, f.timer.remainingSeconds());
           const char *ph = f.timer.phase() == PHASE_FOCUS ? "F" : f.timer.phase() == PHASE_SHORT_BREAK ? "B" : "L";
-          snprintf(b, n, "TIMER %s%u/%u %s", ph, f.timer.cycle(), f.timer.config().cycles, t);
+          if (f.timer.userPaused()) snprintf(b, n, "PAUSED %s", t);
+          else if (f.timer.awayHeld()) snprintf(b, n, "IR HOLD %s", t);
+          else snprintf(b, n, "%s %u/%u %s", ph, f.timer.cycle(), f.timer.config().cycles, t);
         }
         break;
       case SCR_STUDY:
@@ -502,7 +616,7 @@ private:
     const uint32_t e = f.nowEpoch();
     switch (s) {
       case SCR_MAIN: {
-        static const char *const items[5] = {"Break timer", "Study session", "Deadlines", "Pet", "Settings"};
+        static const char *const items[6] = {"Break timer", "Study session", "Deadlines", "Pet", "Settings", "Button guide"};
         snprintf(b, n, "%s", items[i]);
         break;
       }
@@ -629,23 +743,42 @@ private:
       }
     }
     drawScrollbar(d, n, fr.top);
+    const char *action = "Open";
+    if (fr.screen == SCR_CONFIRM) action = fr.cursor ? "Confirm" : "Cancel";
+    else if (fr.screen == SCR_SUBJECTS) action = "Start";
+    else if (fr.screen == SCR_SETTINGS) {
+      if (fr.cursor == 1 || fr.cursor == 2 || fr.cursor == 4) action = "Toggle";
+      else if (fr.cursor == 7) action = "Test";
+      else if (fr.cursor == 8) action = "--";
+      else action = "Edit";
+    } else if (fr.screen == SCR_TIMER) {
+      if (fr.cursor == 0) action = f.timer.phase() == PHASE_IDLE ? "Start" : f.timer.userPaused() ? "Resume" : "Pause";
+      else if (fr.cursor == 1) action = "Skip";
+      else if (fr.cursor == 2) action = "Reset";
+      else if (fr.cursor == 3) action = "Change";
+      else action = "Edit";
+    } else if (fr.screen == SCR_DL_EDIT) {
+      if (dlEditIndex_ < 0) action = fr.cursor == 0 ? "Save" : "Edit";
+      else action = fr.cursor == 4 ? "--" : fr.cursor == 5 ? "Delete" : "Edit";
+    } else if (fr.screen == SCR_STUDY && fr.cursor == 0 && f.study.active()) action = "Stop";
+    controls(d, "Back", "Up", action, "Down");
   }
 
   void drawScrollbar(TinyScreen &d, uint8_t count, uint8_t topIdx) {
     const uint16_t sig = (uint16_t)((count << 8) | topIdx);
     if (sig == sigScroll_) return;
     sigScroll_ = sig;
-    d.drawRect(93, 12, 3, 52, TSRectangleFilled, UI_BG);
+    d.drawRect(93, 12, 3, 39, TSRectangleFilled, UI_BG);
     if (count <= ROWS) return;
-    const uint8_t h = (uint8_t)(52 * ROWS / count);
-    const uint8_t y = (uint8_t)(12 + 52 * topIdx / count);
+    const uint8_t h = (uint8_t)(39 * ROWS / count);
+    const uint8_t y = (uint8_t)(12 + 39 * topIdx / count);
     d.drawRect(94, y, 2, h, TSRectangleFilled, UI_DIM);
   }
 
   void activate(Screen s, uint8_t i, Pet &pet, FeatureManager &f, unsigned long now) {
     switch (s) {
       case SCR_MAIN: {
-        static const Screen next[5] = {SCR_TIMER, SCR_STUDY, SCR_DEADLINES, SCR_PET, SCR_SETTINGS};
+        static const Screen next[6] = {SCR_TIMER, SCR_STUDY, SCR_DEADLINES, SCR_PET, SCR_SETTINGS, SCR_GUIDE};
         push(next[i]);
         break;
       }
@@ -819,11 +952,11 @@ private:
   void drawValue(TinyScreen &d) {
     char b[TEXT_MAX];
     drawText(d, 0, 0, 0, 96, 12, vTitle_, UI_TEXT, UI_TITLE);
-    drawText(d, 1, 0, 14, 96, 12, "Up/Down: change", UI_DIM, UI_BG);
+    drawText(d, 1, 0, 14, 96, 12, "Choose a value", UI_DIM, UI_BG);
     if (vLabels_) snprintf(b, sizeof b, "< %s >", vLabels_[value_]);
     else snprintf(b, sizeof b, "< %d %s >", value_, vUnit_);
     drawText(d, 2, 0, 28, 96, 14, b, UI_TEXT, UI_SEL);
-    drawText(d, 3, 0, 52, 96, 12, "Sel=OK  Back=quit", UI_DIM, UI_BG);
+    controls(d, "Cancel", "+", "Save", "-");
   }
 
   // ------------------------------------------------------------------
@@ -878,12 +1011,15 @@ private:
     snprintf(hh, sizeof hh, dtField_ == 3 ? "[%02u]" : "%02u", dt_.hour);
     snprintf(mi, sizeof mi, dtField_ == 4 ? "[%02u]" : "%02u", dt_.minute);
     drawText(d, 0, 0, 0, 96, 12, dtTarget_ == DT_CLOCK ? "SET DATE & TIME" : "DUE DATE", UI_TEXT, UI_TITLE);
-    drawText(d, 1, 0, 14, 96, 12, TimeUtil::WEEKDAYS[TimeUtil::weekday(TimeUtil::toEpoch(dt_))], UI_DIM, UI_BG);
+    static const char *const fields[5] = {"Day", "Month", "Year", "Hour", "Minute"};
+    snprintf(b, sizeof b, "%u/5 %s %.3s", dtField_ + 1, fields[dtField_],
+             TimeUtil::WEEKDAYS[TimeUtil::weekday(TimeUtil::toEpoch(dt_))]);
+    drawText(d, 1, 0, 13, 96, 12, b, UI_DIM, UI_BG);
     snprintf(b, sizeof b, "%s %s %s", dd, mm, yy);
     drawText(d, 2, 0, 26, 96, 12, b, UI_TEXT, dtField_ <= 2 ? UI_SEL : UI_BG);
     snprintf(b, sizeof b, "%s : %s", hh, mi);
-    drawText(d, 3, 0, 38, 96, 12, b, UI_TEXT, dtField_ >= 3 ? UI_SEL : UI_BG);
-    drawText(d, 4, 0, 52, 96, 12, dtField_ < 4 ? "Sel = next field" : "Sel = SAVE", UI_DIM, UI_BG);
+    drawText(d, 3, 0, 39, 96, 12, b, UI_TEXT, dtField_ >= 3 ? UI_SEL : UI_BG);
+    controls(d, dtField_ ? "Prev" : "Cancel", "+", dtField_ < 4 ? "Next" : "Save", "-");
   }
 
   // ------------------------------------------------------------------
@@ -905,7 +1041,8 @@ private:
     const uint8_t n = pickPalette_ ? PALETTES_PER_PET : (uint8_t)PET_COUNT;
     const uint8_t sp = pickPalette_ ? pet.species() : pickValue_;
     const uint8_t pal = pickPalette_ ? pickValue_ : pet.palette();
-    snprintf(b, sizeof b, "%s %u/%u", pickPalette_ ? "COLOUR" : "CHOOSE PET", pickValue_ + 1, n);
+    const char *name = pickPalette_ ? Pet::paletteName(sp, pal) : Pet::speciesName(sp);
+    snprintf(b, sizeof b, "%s %u/%u", name, pickValue_ + 1, n);
     drawText(d, 0, 0, 0, 96, 12, b, UI_TEXT, UI_TITLE);
     PetPose p = pet.pose(now);
     p.species = sp;
@@ -916,8 +1053,7 @@ private:
       lastPose_ = p;
       petDrawn_ = true;
     }
-    snprintf(b, sizeof b, "< %s >", pickPalette_ ? Pet::paletteName(sp, pal) : Pet::speciesName(sp));
-    drawText(d, 1, 0, 53, 96, 11, b, UI_TEXT, UI_SEL);
+    controls(d, "Cancel", "Prev", "Choose", "Next");
   }
 
   // ------------------------------------------------------------------
@@ -965,6 +1101,7 @@ private:
       c.valid = true;
     }
     drawScrollbar(d, SUBJECT_COUNT, dashTop_);
+    controls(d, "Back", "Up", "Back", "Down");
   }
 
   // ------------------------------------------------------------------
@@ -990,7 +1127,33 @@ private:
     drawText(d, 3, 0, 31, 96, 10, b, UI_TEXT, bg);
     fmtRelLong(b, sizeof b, (int32_t)(dl.due - e));
     drawText(d, 4, 0, 41, 96, 11, b, C8(3, 7, 0), bg);
-    drawText(d, 5, 0, 53, 96, 11, "Sel / Back = OK", UI_TEXT, bg);
+    controls(d, "Dismiss", "--", "Dismiss", "--");
+  }
+
+  // ------------------------------------------------------------------
+  //  BUTTON GUIDE: available any time, with no effect on background timers.
+  // ------------------------------------------------------------------
+  void guideInput(const InputEvent &ev) {
+    if (ev.key == KEY_UP) { if (guidePage_) --guidePage_; }
+    else if (ev.key == KEY_DOWN) { if (guidePage_ < 4) ++guidePage_; }
+    else if (ev.key == KEY_BACK && ev.type == PRESS_LONG) popToHome();
+    else if ((ev.key == KEY_BACK || ev.key == KEY_SELECT) && ev.type == PRESS_SHORT) pop();
+  }
+
+  void drawGuide(TinyScreen &d) {
+    static const char *const titles[5] = {"BUTTON MAP", "HOME: TAP", "HOME: HOLD", "MENUS", "EDITORS"};
+    static const char *const lines[5][4] = {
+      {"TL = TOP LEFT", "TR = TOP RIGHT", "BL = BOTTOM LEFT", "BR = BOTTOM RIGHT"},
+      {"TL: WIGGLE", "TR: JUMP", "BL: LOVE / HEARTS", "BR: NAP"},
+      {"TL: TIMER START/PAUSE", "TR: STUDY START/STOP", "BL: OPEN MAIN MENU", "BR: HOURS DASHBOARD"},
+      {"TR / BR: MOVE UP / DOWN", "BL: USE SELECTED ITEM", "TL: BACK   HOLD: HOME", "HOLD TR/BR: SCROLL"},
+      {"TR / BR: CHANGE VALUE", "BL: SAVE OR NEXT FIELD", "TL: CANCEL / PREV FIELD", "HOLD = ABOUT 0.7 SEC"}
+    };
+    char b[TEXT_MAX];
+    snprintf(b, sizeof b, "%s %u/5", titles[guidePage_], guidePage_ + 1);
+    drawText(d, 0, 0, 0, 96, 12, b, UI_TEXT, UI_TITLE);
+    for (uint8_t i = 0; i < 4; ++i) smallLine(d, 1 + i, 16 + i * 9, lines[guidePage_][i]);
+    controls(d, "Back", guidePage_ ? "Prev" : "--", "Done", guidePage_ < 4 ? "Next" : "--");
   }
 
   // ------------------------------------------------------------------
