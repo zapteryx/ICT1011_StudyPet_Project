@@ -26,7 +26,7 @@
 enum Screen : uint8_t {
   SCR_HOME = 0, SCR_MAIN, SCR_TIMER, SCR_STUDY, SCR_SUBJECTS, SCR_DASH,
   SCR_DEADLINES, SCR_DL_EDIT, SCR_PET, SCR_PET_PICK, SCR_SETTINGS,
-  SCR_VALUE, SCR_DATETIME, SCR_CONFIRM, SCR_ALERT, SCR_GUIDE
+  SCR_VALUE, SCR_DATETIME, SCR_CONFIRM, SCR_ALERT, SCR_GUIDE, SCR_STORAGE_ERROR
 };
 
 enum ValueTarget : uint8_t {
@@ -64,7 +64,23 @@ public:
     appliedBrightness_ = 255;
     toastAt_ = 0;
     toastText_[0] = 0;
+    storageNotified_ = false;
     d.clearScreen();
+  }
+
+  void setBleStatus(const char *status) { bleStatus_ = status; }
+  bool takeBleRetry() { const bool retry = bleRetry_; bleRetry_ = false; return retry; }
+  void externalUpdate(bool deadlinesChanged) {
+    if (deadlinesChanged) {
+      // Do not let a local editor overwrite a deadline changed by the phone.
+      if (dlEditIndex_ >= 0) {
+        for (uint8_t i = 0; i < depth_; ++i) if (stack_[i].screen == SCR_DL_EDIT) {
+          depth_ = i; dlEditIndex_ = -1; break;
+        }
+      }
+      if (current() == SCR_ALERT) pop();
+    }
+    needClear_ = true;
   }
 
   // ------------------------------------------------------------------
@@ -81,6 +97,9 @@ public:
       case SCR_PET_PICK: petPickInput(ev, pet); break;
       case SCR_DASH: dashInput(ev); break;
       case SCR_GUIDE: guideInput(ev); break;
+      case SCR_STORAGE_ERROR:
+        if ((ev.key == KEY_SELECT || ev.key == KEY_BACK) && ev.type == PRESS_SHORT) pop();
+        break;
       case SCR_ALERT:
         if ((ev.key == KEY_SELECT || ev.key == KEY_BACK) && ev.type == PRESS_SHORT) {
           f.deadlines.acknowledge(alertIndex_);
@@ -96,6 +115,11 @@ public:
   //  DRAW (call every loop; throttled internally)
   // ------------------------------------------------------------------
   void update(TinyScreen &d, Pet &pet, FeatureManager &f, unsigned long now) {
+    if (!storageNotified_) {
+      storageNotified_ = true;
+      if (f.deadlines.storageState() == DeadlineStorage::IO_ERROR ||
+          f.deadlines.storageState() == DeadlineStorage::CORRUPT) storageFailure();
+    }
     // Deadline pop-ups interrupt any screen.
     const int8_t pop = f.deadlines.nextPopup();
     if (pop >= 0 && current() != SCR_ALERT) {
@@ -130,6 +154,7 @@ public:
       case SCR_PET_PICK: drawPetPick(d, pet, now); break;
       case SCR_ALERT: drawAlert(d, f); break;
       case SCR_GUIDE: drawGuide(d); break;
+      case SCR_STORAGE_ERROR: drawStorageError(d, f); break;
       default: drawList(d, pet, f); break;
     }
   }
@@ -154,6 +179,9 @@ private:
   MenuFrame stack_[8];
   uint8_t depth_ = 0;
   bool needClear_ = true;
+  bool storageNotified_ = false;
+  const char *bleStatus_ = "off";
+  bool bleRetry_ = false;
   unsigned long lastDraw_ = 0;
   uint8_t appliedBrightness_ = 255;
   LineCache cache_[SLOTS];
@@ -595,7 +623,7 @@ private:
       case SCR_DEADLINES: return 1 + f.deadlines.count();
       case SCR_DL_EDIT: return dlEditIndex_ < 0 ? 5 : 6;
       case SCR_PET: return 2;
-      case SCR_SETTINGS: return (PRESENCE_USE_TOF || IR_USE_THERMAL_CAMERA) ? 12 : 9;
+      case SCR_SETTINGS: return (PRESENCE_USE_TOF || IR_USE_THERMAL_CAMERA) ? 14 : 11;
       case SCR_CONFIRM: return 2;
       default: return 0;
     }
@@ -622,7 +650,11 @@ private:
         } else snprintf(b, n, "STUDY  idle");
         break;
       case SCR_SUBJECTS: snprintf(b, n, "PICK SUBJECT"); break;
-      case SCR_DEADLINES: snprintf(b, n, "DEADLINES %u/%u", f.deadlines.count(), DeadlineManager::MAX); break;
+      case SCR_DEADLINES:
+        if (f.deadlines.storageState() == DeadlineStorage::IO_ERROR) snprintf(b, n, "EEPROM ERROR");
+        else if (f.deadlines.storageState() == DeadlineStorage::CORRUPT) snprintf(b, n, "EEPROM CORRUPT");
+        else snprintf(b, n, "DEADLINES %u/%u", f.deadlines.count(), DeadlineManager::MAX);
+        break;
       case SCR_DL_EDIT: snprintf(b, n, "%s", dlEditIndex_ < 0 ? "NEW DEADLINE" : "EDIT DEADLINE"); break;
       case SCR_PET: snprintf(b, n, "PET"); break;
       case SCR_SETTINGS: snprintf(b, n, "SETTINGS"); break;
@@ -694,6 +726,21 @@ private:
         else snprintf(b, n, "Colour: %s", Pet::paletteName(pet.species(), pet.palette()));
         break;
       case SCR_SETTINGS: {
+        if (i == itemCount(SCR_SETTINGS, f) - 2) {
+          snprintf(b, n, "BLE: %s", bleStatus_); break;
+        }
+        if (i == itemCount(SCR_SETTINGS, f) - 1) {
+          const char *state = "saved";
+          switch (f.deadlines.storageState()) {
+            case DeadlineStorage::EMPTY: state = "empty"; break;
+            case DeadlineStorage::RECOVERED: state = "backup"; break;
+            case DeadlineStorage::CORRUPT: state = "corrupt"; break;
+            case DeadlineStorage::IO_ERROR: state = "error"; break;
+            case DeadlineStorage::UNINITIALIZED: state = "not set"; break;
+            default: break;
+          }
+          snprintf(b, n, "EEPROM: %s", state); break;
+        }
         const Settings &st = f.settings;
         switch (i) {
           case 0: snprintf(b, n, "Set date & time"); break;
@@ -796,7 +843,9 @@ private:
     if (fr.screen == SCR_CONFIRM) action = fr.cursor ? "Confirm" : "Cancel";
     else if (fr.screen == SCR_SUBJECTS) action = "Start";
     else if (fr.screen == SCR_SETTINGS) {
-      if (fr.cursor == 1 || fr.cursor == 2 || fr.cursor == 4) action = "Toggle";
+      if (fr.cursor == itemCount(SCR_SETTINGS, f) - 2) action = "Retry";
+      else if (fr.cursor == itemCount(SCR_SETTINGS, f) - 1) action = "Reload";
+      else if (fr.cursor == 1 || fr.cursor == 2 || fr.cursor == 4) action = "Toggle";
       else if (fr.cursor == 7) action = "Test";
       else if ((fr.cursor >= 8 && fr.cursor <= 10) || (PRESENCE_USE_TOF && fr.cursor == 3)) action = "--";
       else action = "Edit";
@@ -874,8 +923,11 @@ private:
       case SCR_DL_EDIT: {
         const bool isNew = dlEditIndex_ < 0;
         if (isNew && i == 0) {
-          f.deadlines.add(draft_, f.nowEpoch());
-          pop();
+          const int8_t added = f.deadlines.add(draft_, f.nowEpoch());
+          if (added == -2) storageFailure();
+          else if (added == -1) {
+            popToHome(); toast("Deadline list full", UI_WARN, now);
+          } else { pop(); toast("Deadline saved", UI_GOOD, now); }
           break;
         }
         switch (isNew ? i - 1 : i) {
@@ -894,6 +946,13 @@ private:
         push(SCR_PET_PICK);
         break;
       case SCR_SETTINGS: {
+        if (i == itemCount(SCR_SETTINGS, f) - 2) { bleRetry_ = true; break; }
+        if (i == itemCount(SCR_SETTINGS, f) - 1) {
+          if (!f.deadlines.reload(f.nowEpoch()) || f.deadlines.storageState() == DeadlineStorage::CORRUPT) storageFailure();
+          else if (f.deadlines.storageState() == DeadlineStorage::UNINITIALIZED) toast("Save first deadline", UI_WARN, now);
+          else toast("Deadlines loaded", UI_GOOD, now);
+          break;
+        }
         Settings &st = f.settings;
         switch (i) {
           case 0: openDate(DT_CLOCK, f.nowEpoch()); break;
@@ -935,7 +994,9 @@ private:
   void doConfirm(FeatureManager &f) {
     switch (confirm_) {
       case CF_DELETE_DEADLINE:
-        if (dlEditIndex_ >= 0) f.deadlines.remove((uint8_t)dlEditIndex_);
+        if (dlEditIndex_ >= 0 && !f.deadlines.remove((uint8_t)dlEditIndex_, f.nowEpoch())) {
+          storageFailure(); return;
+        }
         dlEditIndex_ = -1;
         pop();  // confirm
         pop();  // editor -> back to the list
@@ -959,8 +1020,11 @@ private:
     draft_.lead = 5;
   }
 
-  void applyDraft(FeatureManager &f) {
-    if (dlEditIndex_ >= 0) f.deadlines.replace((uint8_t)dlEditIndex_, draft_, f.nowEpoch());
+  bool applyDraft(FeatureManager &f) {
+    if (dlEditIndex_ < 0) return true;
+    if (f.deadlines.replace((uint8_t)dlEditIndex_, draft_, f.nowEpoch())) return true;
+    draft_ = f.deadlines.get((uint8_t)dlEditIndex_);
+    return false;
   }
 
   // ------------------------------------------------------------------
@@ -982,23 +1046,25 @@ private:
       if (v < vMin_) v = (list && ev.type == PRESS_SHORT) ? vMax_ : vMin_;
       value_ = v;
     } else if (ev.key == KEY_SELECT && ev.type == PRESS_SHORT) {
-      commitValue(f, now);
+      const bool saved = commitValue(f, now);
       pop();
+      if (!saved) storageFailure();
     } else if (ev.key == KEY_BACK && ev.type == PRESS_SHORT) {
       pop();  // cancel
     }
   }
 
-  void commitValue(FeatureManager &f, unsigned long now) {
+  bool commitValue(FeatureManager &f, unsigned long now) {
     const uint8_t v = (uint8_t)value_;
+    bool saved = true;
     switch (vt_) {
       case VT_FOCUS: f.timer.setField(TF_FOCUS, v); break;
       case VT_SHORT: f.timer.setField(TF_SHORT, v); break;
       case VT_LONG: f.timer.setField(TF_LONG, v); break;
       case VT_CYCLES: f.timer.setField(TF_CYCLES, v); break;
-      case VT_DL_SUBJECT: draft_.subject = v; applyDraft(f); break;
-      case VT_DL_KIND: draft_.kind = v; applyDraft(f); break;
-      case VT_DL_LEAD: draft_.lead = v; applyDraft(f); break;
+      case VT_DL_SUBJECT: draft_.subject = v; saved = applyDraft(f); break;
+      case VT_DL_KIND: draft_.kind = v; saved = applyDraft(f); break;
+      case VT_DL_LEAD: draft_.lead = v; saved = applyDraft(f); break;
       case VT_AWAY: f.settings.awayIdx = v; f.applySettings(now); break;
       case VT_REPEAT: f.settings.repeatIdx = v; break;
       case VT_BRIGHT: f.settings.brightness = v; break;
@@ -1010,6 +1076,7 @@ private:
       default: break;
     }
     vt_ = VT_NONE;
+    return saved;
   }
 
   void drawValue(TinyScreen &d) {
@@ -1056,9 +1123,11 @@ private:
       if (dtField_ < 4) dtField_++;
       else {
         const uint32_t e = TimeUtil::toEpoch(dt_);
+        bool saved = true;
         if (dtTarget_ == DT_CLOCK) f.clock.set(e, now);
-        else { draft_.due = e; applyDraft(f); }
+        else { draft_.due = e; saved = applyDraft(f); }
         pop();
+        if (!saved) storageFailure();
       }
     } else if (ev.key == KEY_BACK && ev.type == PRESS_SHORT) {
       if (dtField_ > 0) dtField_--;
@@ -1217,6 +1286,17 @@ private:
     drawText(d, 0, 0, 0, 96, 12, b, UI_TEXT, UI_TITLE);
     for (uint8_t i = 0; i < 4; ++i) smallLine(d, 1 + i, 16 + i * 9, lines[guidePage_][i]);
     controls(d, "Back", guidePage_ ? "Prev" : "--", "Done", guidePage_ < 4 ? "Next" : "--");
+  }
+
+  void storageFailure() { push(SCR_STORAGE_ERROR); }
+
+  void drawStorageError(TinyScreen &d, FeatureManager &f) {
+    const bool corrupt = f.deadlines.storageState() == DeadlineStorage::CORRUPT;
+    drawText(d, 0, 0, 0, 96, 12, "EEPROM ERROR", UI_TEXT, UI_DANGER);
+    drawText(d, 1, 0, 14, 96, 12, corrupt ? "Data corrupt" : "Save unverified", UI_TEXT, UI_BG);
+    drawText(d, 2, 0, 27, 96, 12, "Check shield", UI_TEXT, UI_BG);
+    drawText(d, 3, 0, 40, 96, 12, corrupt ? "Save to replace" : "Settings: Reload", UI_DIM, UI_BG);
+    controls(d, "Back", "--", "OK", "--");
   }
 
   // ------------------------------------------------------------------

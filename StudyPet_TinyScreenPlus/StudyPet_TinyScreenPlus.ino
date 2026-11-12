@@ -1,14 +1,17 @@
 /*
   StudyPet - TinyScreen+ study companion
   Hardware: TinyScreen+ (ATSAMD21), ASD2022 Wireling Adapter, AST1035 buzzer
-  on port 0 (A0), AST1024 TOF distance sensor on port 1 (I2C). Definitions in Input.h
-  (override them here, ABOVE the #includes, if your wiring differs):
+  on port 0 (A0), AST1024 TOF distance sensor on port 1 (I2C).
+  ASD2202-R-E EEPROM in the TinyShield stack stores deadlines across power-off.
+  ASD2116 BlueNRG-MS TinyShield exposes StudyPet's JSON BLE UART protocol.
+  Hardware settings are shared in StudyPetConfig.h. Edit them there, not here:
 
     // #define BUZZER_PIN      A0
     // #define IR_SENSOR_PIN   A1
     // #define IR_ACTIVE_LEVEL HIGH
     // #define TOF_SENSOR_PORT 1
     // #define TOF_PRESENCE_MAX_MM 1000
+    // #define DEADLINE_EEPROM_ADDRESS 0x50 // factory EEPROM address jumpers
     // #define PRESENCE_USE_TOF 0 // only if switching back to a legacy sensor
 
   Button mapping (screen upright):
@@ -28,6 +31,7 @@
     4. UI draws: deadline pop-ups pre-empt any screen; everything else is
        either HOME (pet) or the full-screen menu stack.
 */
+#include "StudyPetConfig.h"
 #include <SPI.h>
 #include <Wire.h>
 #include <TinyScreen.h>
@@ -35,12 +39,14 @@
 #include "Pet.h"
 #include "Features.h"
 #include "UI.h"
+#include "BleLink.h"
 
 TinyScreen display = TinyScreen(TinyScreenPlus);
 ButtonInput buttons;
 Pet pet;
 FeatureManager features;
 StudyPetUI ui;
+BleLink ble;
 
 void setup() {
   display.begin();
@@ -53,9 +59,17 @@ void setup() {
   features.begin(now);
   pet.begin(now);
   ui.begin(display, now);
+  ble.begin(); // no wait for USB Serial Monitor; missing BLE leaves local UI usable
+  ui.setBleStatus(ble.statusText());
 }
 
 void loop() {
+  // Service BLE before local input; all changes use the same feature managers.
+  if (ui.takeBleRetry()) ble.begin();
+  ble.poll(features, pet);
+  const uint8_t changes = ble.takeChanges();
+  if (changes) ui.externalUpdate((changes & BleProtocol::DEADLINES) != 0);
+  ui.setBleStatus(ble.statusText());
   const unsigned long now = millis();
 
   // 1. Input. Poll every loop so short taps are never missed.

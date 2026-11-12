@@ -1,0 +1,18 @@
+# Icons (placeholder until created)
+icon-192.png.placeholder
+icon-512.png.placeholder
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*

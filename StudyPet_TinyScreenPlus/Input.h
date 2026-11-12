@@ -3,77 +3,14 @@
 
 #include <Arduino.h>
 #include <TinyScreen.h>
+#include "StudyPetConfig.h"
 
-// =====================================================================
-//  PIN DEFINITIONS
-//  Override any of these by #defining them in the .ino ABOVE the
-//  #include "Input.h" line. TinyScreen+ GPIO is 3.3 V ONLY - never feed
-//  a 5 V sensor output straight into these pins.
-// =====================================================================
-#ifndef BUZZER_PIN
-#define BUZZER_PIN A0          // piezo / buzzer signal pin
-#endif
-
-// 1 = passive piezo, driven with tone() (pitch is software controlled)
-// 0 = active buzzer (has its own oscillator; simply switched HIGH/LOW)
-#ifndef BUZZER_PASSIVE
-#define BUZZER_PASSIVE 1
-#endif
-
-#ifndef IR_SENSOR_PIN
-#define IR_SENSOR_PIN A1       // digital OUT of the IR / PIR module
-#endif
-
-// PIR motion modules (AM312, HC-SR501):  output HIGH when someone is seen.
-// IR obstacle / reflective boards (FC-51, TCRT5000): usually LOW when seen.
-#ifndef IR_ACTIVE_LEVEL
-#define IR_ACTIVE_LEVEL HIGH
-#endif
-
-#ifndef IR_USE_PULLUP
-#define IR_USE_PULLUP 0        // set to 1 for open-collector sensor outputs
-#endif
-
-// Your TinyScreen+ uses the ASD2022 Wireling Adapter. Wireling.begin() powers
-// it and initializes its I2C multiplexer. Set to 0 for directly wired parts.
-#ifndef USE_WIRELING_ADAPTER
-#define USE_WIRELING_ADAPTER 1
-#endif
-
-// IR_SENSOR_PIN is ONLY for a digital IR/PIR sensor. A thermal camera needs
-// its own I2C driver and Wireling.selectPort(port); digitalRead(A1) cannot
-// read temperatures or establish that a person is present.
-#ifndef IR_USE_THERMAL_CAMERA
-#define IR_USE_THERMAL_CAMERA 0  // optional legacy AST1045 mode
-#endif
-#ifndef PRESENCE_USE_TOF
-#define PRESENCE_USE_TOF 1 // AST1024 / VL53L0X replaces the thermal camera
-#endif
-#ifndef TOF_SENSOR_PORT
-#define TOF_SENSOR_PORT 1 // adapter socket number, not the A1 GPIO value
-#endif
-#ifndef TOF_PRESENCE_MAX_MM
-#define TOF_PRESENCE_MAX_MM 1000 // exactly 1 metre, inclusive
-#endif
+// Hardware options are shared by the sketch and BLE source file. Set them
+// in StudyPetConfig.h. TinyScreen+ GPIO is 3.3 V; digital IR/PIR mode expects
+// a HIGH/LOW signal, while TOF/thermal modules communicate over I2C.
 #if PRESENCE_USE_TOF
 #include "DistanceSensor.h"
-#endif
-#ifndef THERMAL_CAMERA_PORT
-#define THERMAL_CAMERA_PORT 1  // adapter socket number, NOT the A1 GPIO value
-#endif
-#ifndef THERMAL_MIN_QUARTER_C
-#define THERMAL_MIN_QUARTER_C 112  // 28 C
-#endif
-#ifndef THERMAL_MAX_QUARTER_C
-#define THERMAL_MAX_QUARTER_C 160  // 40 C
-#endif
-#ifndef THERMAL_CONTRAST_QUARTER_C
-#define THERMAL_CONTRAST_QUARTER_C 10  // 2.5 C above median background
-#endif
-#ifndef THERMAL_MIN_PIXELS
-#define THERMAL_MIN_PIXELS 3
-#endif
-#if IR_USE_THERMAL_CAMERA && !PRESENCE_USE_TOF
+#elif IR_USE_THERMAL_CAMERA
 #include "ThermalCamera.h"
 #endif
 

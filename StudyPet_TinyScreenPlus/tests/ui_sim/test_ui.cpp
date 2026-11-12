@@ -161,5 +161,46 @@ int main(int argc, char **argv) {
       press(KEY_DOWN);
     }
   }
+  // Persistent-storage errors must remain visible on the current editor stack.
+  Wire.eepromReadOnly = true;
+  screen(SCR_DEADLINES); press(KEY_SELECT); CHECK(ui.current() == SCR_DL_EDIT);
+  press(KEY_SELECT); CHECK(ui.current() == SCR_STORAGE_ERROR);
+  CHECK(features.deadlines.count() == 0); snapshot("19_eeprom_error");
+  press(KEY_SELECT); CHECK(ui.current() == SCR_DL_EDIT);
+  Wire.eepromReadOnly = false;
+  press(KEY_SELECT); CHECK(ui.current() == SCR_DEADLINES && features.deadlines.count() == 1);
+  press(KEY_DOWN); press(KEY_SELECT); CHECK(ui.current() == SCR_DL_EDIT);
+  Wire.eepromReadOnly = true;
+  press(KEY_SELECT); press(KEY_UP); press(KEY_SELECT);
+  CHECK(ui.current() == SCR_STORAGE_ERROR);
+  press(KEY_SELECT); CHECK(ui.current() == SCR_DL_EDIT);
+  CHECK(ui.draft_.subject == features.deadlines.get(0).subject);
+  // A failed delete must not pop the editor or discard its confirmation target.
+  ui.top().cursor = 5; press(KEY_SELECT); press(KEY_DOWN); press(KEY_SELECT);
+  CHECK(ui.current() == SCR_STORAGE_ERROR && ui.confirm_ == CF_DELETE_DEADLINE);
+  press(KEY_SELECT); CHECK(ui.current() == SCR_CONFIRM);
+  Wire.eepromReadOnly = false;
+  press(KEY_SELECT); CHECK(features.deadlines.count() == 0 && ui.current() == SCR_HOME);
+  // Missing EEPROM at boot prompts once, without destroying other app features.
+  Wire.eepromConnected = false;
+  FeatureManager offline; StudyPetUI offlineUI; TinyScreen offlineDisplay;
+  offline.begin(now); offlineUI.begin(offlineDisplay, now);
+  offlineUI.update(offlineDisplay, pet, offline, now);
+  CHECK(offlineUI.current() == SCR_STORAGE_ERROR);
+  offlineUI.handleInput({KEY_SELECT, PRESS_SHORT}, pet, offline, now);
+  offlineUI.update(offlineDisplay, pet, offline, now + 50);
+  CHECK(offlineUI.current() == SCR_HOME);
+  Wire.eepromConnected = true;
+  // Phone edits close stale existing-record editors but preserve new local drafts.
+  Deadline remote = {}; remote.used = true; remote.due = features.nowEpoch() + 86400UL;
+  CHECK(features.deadlines.add(remote, features.nowEpoch()) == 0);
+  screen(SCR_DEADLINES, 1); press(KEY_SELECT); press(KEY_SELECT);
+  CHECK(ui.current() == SCR_VALUE);
+  remote.subject = 1; CHECK(features.deadlines.replace(0, remote, features.nowEpoch()));
+  ui.externalUpdate(true); CHECK(ui.current() == SCR_DEADLINES && ui.dlEditIndex_ == -1);
+  screen(SCR_DEADLINES); press(KEY_SELECT); CHECK(ui.current() == SCR_DL_EDIT && ui.dlEditIndex_ == -1);
+  ui.externalUpdate(true); CHECK(ui.current() == SCR_DL_EDIT);
+  ui.setBleStatus("connected"); screen(SCR_SETTINGS, ui.itemCount(SCR_SETTINGS, features) - 2);
+  press(KEY_SELECT); CHECK(ui.takeBleRetry()); CHECK(!ui.takeBleRetry());
   printf("PASS: %d UI/state/cache checks; all draw coordinates within 96x64.\n", checks);
 }

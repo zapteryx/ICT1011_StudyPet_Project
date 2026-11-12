@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#1a3a52">
+  <meta name="description" content="Remote control and monitor your StudyPet device">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>StudyPet Companion</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" type="image/svg+xml" href="icon-192.svg">
+</head>
+<body>
+  <div id="app">
+    <!-- Connection Status -->
+    <header class="header">
+      <div class="header-content">
+        <h1>StudyPet</h1>
+        <button id="connectBtn" class="connect-btn">Connect Device</button>
+      </div>
+      <div id="connectionStatus" class="status disconnected">
+        <span class="status-indicator"></span>
+        <span class="status-text">Disconnected</span>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Offline Notice -->
+      <div id="offlineNotice" class="notice info hidden">
+        <span>📶 You're offline. Some features may be limited.</span>
+      </div>
+
+      <!-- Connection Required Notice -->
+      <div id="connectionNotice" class="notice warning">
+        <p>🔌 Connect to your StudyPet device to get started</p>
+        <p class="notice-small">Make sure your device is powered on and Bluetooth is enabled</p>
+      </div>
+
+      <!-- Tabs -->
+      <nav class="tabs">
+        <button class="tab active" data-tab="timer">Timer</button>
+        <button class="tab" data-tab="study">Study</button>
+        <button class="tab" data-tab="deadlines">Deadlines</button>
+        <button class="tab" data-tab="pet">Pet</button>
+        <button class="tab" data-tab="settings">Settings</button>
+      </nav>
+
+      <!-- Timer Tab -->
+      <section id="timerTab" class="tab-content active">
+        <div class="card">
+          <h2>Break Timer</h2>
+          <div class="timer-display">
+            <div class="time-remaining" id="timerDisplay">--:--</div>
+            <div class="timer-phase" id="timerPhase">Idle</div>
+          </div>
+
+          <div class="timer-progress">
+            <div class="progress-bar">
+              <div class="progress-fill" id="timerProgress" style="width: 0%"></div>
+            </div>
+            <div class="cycle-info" id="cycleInfo">Cycle 1 / 4</div>
+          </div>
+
+          <div class="button-group">
+            <button id="timerStartPause" class="btn btn-primary">Start</button>
+            <button id="timerSkip" class="btn btn-secondary">Skip Phase</button>
+            <button id="timerReset" class="btn btn-secondary">Reset</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Timer Configuration</h3>
+          <div class="form-group">
+            <label>Style</label>
+            <select id="timerStyle" class="input">
+              <option value="0">Pomodoro (25+5)</option>
+              <option value="1">90-minute Deep Work</option>
+              <option value="2">Custom</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Focus Duration (minutes)</label>
+            <input type="number" id="focusDuration" class="input" min="5" max="180" step="5" value="25">
+          </div>
+          <div class="form-group">
+            <label>Short Break (minutes)</label>
+            <input type="number" id="shortBreak" class="input" min="1" max="60" value="5">
+          </div>
+          <div class="form-group">
+            <label>Long Break (minutes)</label>
+            <input type="number" id="longBreak" class="input" min="5" max="90" step="5" value="15">
+          </div>
+          <div class="form-group">
+            <label>Cycles Before Long Break</label>
+            <input type="number" id="cycles" class="input" min="1" max="8" value="4">
+          </div>
+          <button id="saveTimerConfig" class="btn btn-primary">Save Configuration</button>
+        </div>
+      </section>
+
+      <!-- Study Tab -->
+      <section id="studyTab" class="tab-content">
+        <div class="card">
+          <h2>Study Session</h2>
+          <div class="study-display">
+            <div class="session-time" id="sessionTime">00:00:00</div>
+            <div class="session-subject" id="sessionSubject">Not studying</div>
+          </div>
+
+          <div class="form-group">
+            <label>Subject</label>
+            <select id="studySubject" class="input">
+              <option value="0">INF1102</option>
+              <option value="1">INF1103</option>
+              <option value="2">INF1104</option>
+              <option value="3">Revision</option>
+              <option value="4">Other</option>
+            </select>
+          </div>
+
+          <div class="button-group">
+            <button id="studyStartStop" class="btn btn-primary">Start Session</button>
+            <button id="studyDashboard" class="btn btn-secondary">View Dashboard</button>
+          </div>
+        </div>
+
+        <div class="card" id="studyDashboardCard">
+          <h3>Study Hours</h3>
+          <div id="studyHoursList" class="hours-list">
+            <!-- Populated dynamically -->
+          </div>
+          <div class="total-hours" id="totalHours">Total: 0h 0m</div>
+          <button id="resetHours" class="btn btn-danger">Reset All Hours</button>
+        </div>
+      </section>
+
+      <!-- Deadlines Tab -->
+      <section id="deadlinesTab" class="tab-content">
+        <div class="card">
+          <div class="card-header">
+            <h2>Deadlines</h2>
+            <button id="addDeadline" class="btn btn-primary btn-sm">+ New</button>
+          </div>
+
+          <div id="deadlinesList" class="deadlines-list">
+            <!-- Populated dynamically -->
+          </div>
+        </div>
+
+        <!-- Deadline Editor Modal -->
+        <div id="deadlineModal" class="modal hidden">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h3 id="deadlineModalTitle">New Deadline</h3>
+              <button class="close-btn" id="closeDeadlineModal">&times;</button>
+            </div>
+            <div class="modal-body">
+              <div class="form-group">
+                <label>Subject</label>
+                <select id="deadlineSubject" class="input">
+                  <option value="0">INF1102</option>
+                  <option value="1">INF1103</option>
+                  <option value="2">INF1104</option>
+                  <option value="3">Revision</option>
+                  <option value="4">Other</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Type</label>
+                <select id="deadlineKind" class="input">
+                  <option value="0">Assignment</option>
+                  <option value="1">Quiz</option>
+                  <option value="2">Exam</option>
+                  <option value="3">Project</option>
+                  <option value="4">Lab</option>
+                  <option value="5">Other</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Due Date & Time</label>
+                <input type="datetime-local" id="deadlineDue" class="input">
+              </div>
+              <div class="form-group">
+                <label>Remind Me</label>
+                <select id="deadlineRemind" class="input">
+                  <option value="0">At due time</option>
+                  <option value="1">1 hour before</option>
+                  <option value="2">3 hours before</option>
+                  <option value="3">6 hours before</option>
+                  <option value="4">12 hours before</option>
+                  <option value="5">1 day before</option>
+                  <option value="6">2 days before</option>
+                  <option value="7">3 days before</option>
+                  <option value="8">1 week before</option>
+                </select>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button id="deleteDeadline" class="btn btn-danger hidden">Delete</button>
+              <button id="cancelDeadline" class="btn btn-secondary">Cancel</button>
+              <button id="saveDeadline" class="btn btn-primary">Save</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Pet Tab -->
+      <section id="petTab" class="tab-content">
+        <div class="card">
+          <h2>Pet Customization</h2>
+
+          <div class="pet-preview" id="petPreview">
+            <div class="pet-placeholder">🐱</div>
+            <p class="pet-name" id="petName">Cat - Ginger</p>
+          </div>
+
+          <div class="form-group">
+            <label>Species</label>
+            <select id="petSpecies" class="input">
+              <option value="0">Cat</option>
+              <option value="1">Dog</option>
+              <option value="2">Fox</option>
+              <option value="3">Panda</option>
+              <option value="4">Capybara</option>
+              <option value="5">Rabbit</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>Color Palette</label>
+            <select id="petPalette" class="input">
+              <!-- Options populated based on species -->
+            </select>
+          </div>
+
+          <button id="savePet" class="btn btn-primary">Save Pet</button>
+        </div>
+      </section>
+
+      <!-- Settings Tab -->
+      <section id="settingsTab" class="tab-content">
+        <div class="card">
+          <h2>Device Settings</h2>
+
+          <div class="form-group">
+            <label>Device Date & Time (shown in phone timezone)</label>
+            <input type="datetime-local" id="deviceDateTime" class="input" readonly>
+            <button id="syncDateTime" class="btn btn-secondary btn-sm">Sync Now</button>
+          </div>
+
+          <div class="form-group toggle-group">
+            <label>Buzzer</label>
+            <label class="toggle">
+              <input type="checkbox" id="buzzerEnabled">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          <div class="form-group toggle-group">
+            <label>TOF Presence Sensor</label>
+            <label class="toggle">
+              <input type="checkbox" id="irEnabled">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          <div class="form-group toggle-group">
+            <label>Presence Pauses Timer</label>
+            <label class="toggle">
+              <input type="checkbox" id="irPausesTimer">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          <div class="form-group">
+            <label>Away After (legacy IR mode only)</label>
+            <select id="awayDelay" class="input">
+              <option value="0">10 seconds</option>
+              <option value="1">30 seconds</option>
+              <option value="2">1 minute</option>
+              <option value="3">2 minutes</option>
+              <option value="4">5 minutes</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>Re-alert Interval</label>
+            <select id="repeatAlert" class="input">
+              <option value="0">Off</option>
+              <option value="1">15 minutes</option>
+              <option value="2">30 minutes</option>
+              <option value="3">60 minutes</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>Brightness (1-15)</label>
+            <input type="range" id="brightness" class="slider" min="1" max="15" value="10">
+            <span id="brightnessValue" class="range-value">10</span>
+          </div>
+
+          <div class="form-group">
+            <label>TOF Wireling Port</label>
+            <select id="tofPort" class="input">
+              <option value="0">Port 0 (A0)</option>
+              <option value="1" selected>Port 1 (A1)</option>
+              <option value="2">Port 2 (A2)</option>
+              <option value="3">Port 3 (A3)</option>
+            </select>
+            <p>Timers pause when the person is more than 1 metre away.</p>
+            <p>Range: <span id="rangeStatus">Unknown</span></p>
+            <p>Deadline EEPROM: <span id="eepromStatus">Unknown</span></p>
+          </div>
+
+          <button id="saveSettings" class="btn btn-primary">Save Settings</button>
+          <button id="testBuzzer" class="btn btn-secondary">Test Buzzer</button>
+        </div>
+
+        <div class="card">
+          <h3>About</h3>
+          <p>StudyPet Companion App v1.1 · ASD2116</p>
+          <p>Device firmware: <span id="firmwareVersion">Unknown</span></p>
+          <button id="refreshData" class="btn btn-secondary">Refresh All Data</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Toast Notifications -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="ble.js?v=1.1"></script>
+  <script src="app.js?v=1.1"></script>
+</body>
+</html>

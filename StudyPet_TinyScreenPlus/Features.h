@@ -470,11 +470,23 @@ struct Deadline {
   uint32_t lastAlert;
 };
 
+#include "DeadlineStorage.h"
+
 class DeadlineManager {
 public:
-  static const uint8_t MAX = 8;
+  static const uint8_t MAX = DeadlineStorage::MAX;
 
-  void begin() { memset(items_, 0, sizeof(items_)); }
+  void begin(uint32_t now = 0) { memset(items_, 0, sizeof(items_)); reload(now); }
+  DeadlineStorage::State storageState() const { return storage_.state(); }
+  bool reload(uint32_t now) {
+    Deadline restored[MAX];
+    if (!storage_.load(restored)) { loaded_ = false; return false; }
+    memcpy(items_, restored, sizeof(items_)); loaded_ = true;
+    // Popup/acknowledgment state is transient. Re-evaluate reminders against
+    // the software clock instead of persisting a beep every minute.
+    for (uint8_t i = 0; i < MAX; ++i) items_[i].lastAlert = now;
+    return true;
+  }
 
   uint8_t count() const {
     uint8_t n = 0;
@@ -486,26 +498,39 @@ public:
 
   // CREATE
   int8_t add(const Deadline &d, uint32_t now) {
+    if (!loaded_ && !reload(now)) return -2;
     for (uint8_t i = 0; i < MAX; ++i) {
       if (!items_[i].used) {
+        const Deadline previous = items_[i];
         items_[i] = d;
         items_[i].used = true;
         settle(i, now);
+        if (!persist()) { items_[i] = previous; return -2; }
         return (int8_t)i;
       }
     }
     return -1;
   }
   // UPDATE
-  void replace(uint8_t i, const Deadline &d, uint32_t now) {
-    if (i >= MAX || !items_[i].used) return;
+  bool replace(uint8_t i, const Deadline &d, uint32_t now) {
+    if (!loaded_ && !reload(now)) return false;
+    if (i >= MAX || !items_[i].used) return false;
+    const Deadline previous = items_[i];
     items_[i] = d;
     items_[i].used = true;
     settle(i, now);
+    if (previous.subject == d.subject && previous.kind == d.kind && previous.lead == d.lead && previous.due == d.due) return true;
+    if (!persist()) { items_[i] = previous; return false; }
+    return true;
   }
   // DELETE
-  void remove(uint8_t i) {
-    if (i < MAX) memset(&items_[i], 0, sizeof(Deadline));
+  bool remove(uint8_t i, uint32_t now = 0) {
+    if (!loaded_ && !reload(now)) return false;
+    if (i >= MAX || !items_[i].used) return false;
+    const Deadline previous = items_[i];
+    memset(&items_[i], 0, sizeof(Deadline));
+    if (!persist()) { items_[i] = previous; return false; }
+    return true;
   }
 
   DeadlineStatus status(uint8_t i, uint32_t now) const {
@@ -585,6 +610,14 @@ public:
 
 private:
   Deadline items_[MAX];
+  DeadlineStorage storage_;
+  bool loaded_ = false;
+  bool persist() {
+    if (storage_.save(items_)) return true;
+    // A lost acknowledgment after commit can be ambiguous. Rescan before
+    // the next mutation so an unverified commit cannot hide other deadlines.
+    loaded_ = false; return false;
+  }
 
   // After a save the user has just seen the entry, so don't pop up
   // immediately. The footer banner still shows if it is already due soon.
@@ -627,13 +660,15 @@ public:
     settings.brightness = 10;
 #if USE_WIRELING_ADAPTER
     Wireling.begin();
+#else
+    Wire.begin(); // EEPROM is on the main I2C bus even without a Wireling adapter
 #endif
     buzzer.begin(BUZZER_PIN, BUZZER_PASSIVE != 0);
     presence.begin(IR_SENSOR_PIN, IR_ACTIVE_LEVEL, IR_USE_PULLUP != 0, now);
     clock.begin(now);
     timer.begin(now);
     study.begin(now);
-    deadlines.begin();
+    deadlines.begin(clock.epoch());
     applySettings(now);
     lastDeadlineCheck_ = now;
   }
