@@ -1,5 +1,9 @@
 # StudyPet BLE Firmware Integration Guide
 
+> Historical design reference supplied with the original PWA. For this ASD2116
+> project, use the existing firmware and [current BLE contract](../docs/BLE.md).
+> The generic BLEPeripheral example below is not the driver for ASD2116.
+
 This document describes how to add BLE support to the StudyPet TinyCircuit firmware.
 
 ## Hardware Requirements

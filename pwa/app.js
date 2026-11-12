@@ -48,6 +48,11 @@ class StudyPetApp {
 
     this.updateInterval = null;
     this.editingDeadlineIndex = -1;
+    this.deadlineSnapshot = null;
+    this.dirty = { timer: false, pet: false, settings: false };
+    this.timerReceivedAt = this.studyReceivedAt = 0;
+    this.actionBusy = this.syncing = false;
+    this.refreshPromise = null;
 
     this.init();
   }
@@ -70,14 +75,13 @@ class StudyPetApp {
   setupBLE() {
     this.ble.onConnectionChange = (connected) => {
       this.updateConnectionStatus(connected);
-      if (connected) {
-        this.onDeviceConnected();
-      }
+      if (!connected) { clearTimeout(this.updateInterval); this.updateInterval = null; }
     };
 
     this.ble.onDataReceived = (data) => {
       this.handleDeviceData(data);
     };
+    this.ble.onError = error => this.showToast(error.message, 'error');
   }
 
   /**
@@ -85,7 +89,9 @@ class StudyPetApp {
    */
   setupEventListeners() {
     // Connection
-    document.getElementById('connectBtn').addEventListener('click', () => this.connect());
+    document.getElementById('connectBtn').addEventListener('click', () =>
+      this.ble.connected ? this.disconnect() : this.connect());
+    const action = (method, refresh = true) => () => this.runAction(() => method.call(this), refresh);
 
     // Tabs
     document.querySelectorAll('.tab').forEach(tab => {
@@ -93,10 +99,19 @@ class StudyPetApp {
     });
 
     // Timer controls
-    document.getElementById('timerStartPause').addEventListener('click', () => this.timerToggle());
-    document.getElementById('timerSkip').addEventListener('click', () => this.timerSkip());
-    document.getElementById('timerReset').addEventListener('click', () => this.timerReset());
-    document.getElementById('saveTimerConfig').addEventListener('click', () => this.saveTimerConfig());
+    document.getElementById('timerStartPause').addEventListener('click', action(this.timerToggle));
+    document.getElementById('timerSkip').addEventListener('click', action(this.timerSkip));
+    document.getElementById('timerReset').addEventListener('click', action(this.timerReset));
+    document.getElementById('saveTimerConfig').addEventListener('click', action(this.saveTimerConfig));
+    for (const id of ['timerStyle', 'focusDuration', 'shortBreak', 'longBreak', 'cycles']) {
+      document.getElementById(id).addEventListener('input', () => { this.dirty.timer = true; });
+    }
+    for (const id of ['petSpecies', 'petPalette']) {
+      document.getElementById(id).addEventListener('change', () => { this.dirty.pet = true; });
+    }
+    for (const id of ['buzzerEnabled', 'irEnabled', 'irPausesTimer', 'awayDelay', 'repeatAlert', 'brightness', 'tofPort']) {
+      document.getElementById(id).addEventListener('input', () => { this.dirty.settings = true; });
+    }
 
     // Timer config change handler
     document.getElementById('timerStyle').addEventListener('change', (e) => {
@@ -115,26 +130,26 @@ class StudyPetApp {
     });
 
     // Study controls
-    document.getElementById('studyStartStop').addEventListener('click', () => this.studyToggle());
+    document.getElementById('studyStartStop').addEventListener('click', action(this.studyToggle));
     document.getElementById('studyDashboard').addEventListener('click', () => this.showStudyDashboard());
-    document.getElementById('resetHours').addEventListener('click', () => this.resetStudyHours());
+    document.getElementById('resetHours').addEventListener('click', action(this.resetStudyHours));
 
     // Deadlines
     document.getElementById('addDeadline').addEventListener('click', () => this.openDeadlineModal());
-    document.getElementById('saveDeadline').addEventListener('click', () => this.saveDeadline());
-    document.getElementById('deleteDeadline').addEventListener('click', () => this.deleteDeadline());
+    document.getElementById('saveDeadline').addEventListener('click', action(this.saveDeadline));
+    document.getElementById('deleteDeadline').addEventListener('click', action(this.deleteDeadline));
     document.getElementById('cancelDeadline').addEventListener('click', () => this.closeDeadlineModal());
     document.getElementById('closeDeadlineModal').addEventListener('click', () => this.closeDeadlineModal());
 
     // Pet
     document.getElementById('petSpecies').addEventListener('change', () => this.updatePetPaletteOptions());
-    document.getElementById('savePet').addEventListener('click', () => this.savePet());
+    document.getElementById('savePet').addEventListener('click', action(this.savePet));
 
     // Settings
-    document.getElementById('syncDateTime').addEventListener('click', () => this.syncDateTime());
-    document.getElementById('saveSettings').addEventListener('click', () => this.saveSettings());
-    document.getElementById('testBuzzer').addEventListener('click', () => this.testBuzzer());
-    document.getElementById('refreshData').addEventListener('click', () => this.refreshAllData());
+    document.getElementById('syncDateTime').addEventListener('click', action(this.syncDateTime));
+    document.getElementById('saveSettings').addEventListener('click', action(this.saveSettings));
+    document.getElementById('testBuzzer').addEventListener('click', action(this.testBuzzer));
+    document.getElementById('refreshData').addEventListener('click', action(this.refreshAllData, false));
     document.getElementById('brightness').addEventListener('input', (e) => {
       document.getElementById('brightnessValue').textContent = e.target.value;
     });
@@ -145,9 +160,10 @@ class StudyPetApp {
    */
   setupServiceWorker() {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('service-worker.js')
+      navigator.serviceWorker.register('service-worker.js', { updateViaCache: 'none' })
         .then(registration => {
           console.log('Service Worker registered:', registration);
+          registration.update().catch(console.warn);
         })
         .catch(error => {
           console.log('Service Worker registration failed:', error);
@@ -177,11 +193,19 @@ class StudyPetApp {
    * Connect to device
    */
   async connect() {
+    if (this.syncing || this.ble.connecting) return;
+    this.syncing = true;
     try {
       await this.ble.connect();
-      this.showToast('Connected successfully', 'success');
+      document.querySelector('#connectionStatus .status-text').textContent = 'Connected · syncing…';
+      await this.onDeviceConnected();
+      document.querySelector('#connectionStatus .status-text').textContent = 'Connected · synced';
+      this.showToast('Device data synchronized', 'success');
     } catch (error) {
-      this.showToast('Connection failed: ' + error.message, 'error');
+      this.showToast('Connection/sync failed: ' + error.message, 'error');
+    } finally {
+      this.syncing = false;
+      if (this.ble.connected) this.scheduleRefresh();
     }
   }
 
@@ -199,14 +223,12 @@ class StudyPetApp {
       status.querySelector('.status-text').textContent = 'Connected';
       notice.classList.add('hidden');
       connectBtn.textContent = 'Disconnect';
-      connectBtn.onclick = () => this.disconnect();
     } else {
       status.classList.remove('connected');
       status.classList.add('disconnected');
       status.querySelector('.status-text').textContent = 'Disconnected';
       notice.classList.remove('hidden');
       connectBtn.textContent = 'Connect Device';
-      connectBtn.onclick = () => this.connect();
     }
   }
 
@@ -222,16 +244,9 @@ class StudyPetApp {
    * Handle device connected event
    */
   async onDeviceConnected() {
-    // Request current state from device
-    try {
-      await this.ble.requestState();
-      await this.delay(100);
-      await this.ble.getDeadlines();
-      await this.delay(100);
-      await this.ble.getStudyHours();
-    } catch (error) {
-      console.error('Failed to request initial state:', error);
-    }
+    // Deadlines persist, the software clock does not. Sync before loading them.
+    await this.ble.setDateTime(Math.floor(Date.now() / 1000));
+    await this.refreshAllData(true);
   }
 
   /**
@@ -251,7 +266,9 @@ class StudyPetApp {
         this.updateStudyState(data);
         break;
       case 'DEADLINES':
+        this.state.eepromState = data.eepromState;
         this.updateDeadlines(data.deadlines);
+        this.renderDeviceStatus();
         break;
       case 'HOURS':
         this.updateStudyHours(data.hours);
@@ -263,10 +280,9 @@ class StudyPetApp {
         this.updateSettingsState(data);
         break;
       case 'ACK':
-        this.showToast(data.message || 'Command acknowledged', 'success');
         break;
       case 'ERROR':
-        this.showToast(data.message || 'Error occurred', 'error');
+        // Command promises surface errors to the action that sent them.
         break;
     }
   }
@@ -279,13 +295,30 @@ class StudyPetApp {
     if (data.study) this.updateStudyState(data.study);
     if (data.pet) this.updatePetState(data.pet);
     if (data.settings) this.updateSettingsState(data.settings);
+    if (data.range) this.state.range = data.range;
+    if (data.timestamp !== undefined) {
+      this.state.timestamp = data.timestamp;
+      document.getElementById('deviceDateTime').value = this.epochToDatetimeLocal(data.timestamp);
+    }
+    if (data.eepromState !== undefined) this.state.eepromState = data.eepromState;
+    document.getElementById('firmwareVersion').textContent = `BLE protocol ${data.protocol || 1}`;
+    this.renderDeviceStatus();
   }
 
   /**
    * Update timer state and UI
    */
   updateTimerState(timer) {
+    timer = { ...timer };
+    if (typeof timer.phase === 'number') timer.phase = ['idle', 'focus', 'break', 'long'][timer.phase] || 'idle';
     this.state.timer = { ...this.state.timer, ...timer };
+    this.timerReceivedAt = Date.now();
+    if (!this.dirty.timer) {
+      const fields = { timerStyle: 'style', focusDuration: 'focusMin', shortBreak: 'shortMin', longBreak: 'longMin', cycles: 'cycles' };
+      for (const [id, key] of Object.entries(fields)) {
+        if (timer[key] !== undefined) document.getElementById(id).value = timer[key];
+      }
+    }
     this.renderTimer();
   }
 
@@ -294,6 +327,7 @@ class StudyPetApp {
    */
   updateStudyState(study) {
     this.state.study = { ...this.state.study, ...study };
+    this.studyReceivedAt = Date.now();
     this.renderStudy();
   }
 
@@ -317,6 +351,13 @@ class StudyPetApp {
    * Update deadlines
    */
   updateDeadlines(deadlines) {
+    if (this.editingDeadlineIndex >= 0 && this.deadlineSnapshot) {
+      const current = deadlines.find(d => d.index === this.editingDeadlineIndex);
+      if (JSON.stringify(current) !== this.deadlineSnapshot) {
+        this.closeDeadlineModal();
+        this.showToast('This deadline changed on the device. Open it again to edit.', 'warning');
+      }
+    }
     this.state.deadlines = deadlines;
     this.renderDeadlines();
   }
@@ -333,7 +374,9 @@ class StudyPetApp {
    * Render timer UI
    */
   renderTimer() {
-    const { phase, remaining, cycle, cycles, paused } = this.state.timer;
+    const { phase, cycle, cycles, paused, awayPaused, counting } = this.state.timer;
+    const elapsed = this.displayElapsed(this.timerReceivedAt);
+    const remaining = Math.max(0, this.state.timer.remaining - (counting ? elapsed : 0));
 
     // Update display
     const minutes = Math.floor(remaining / 60);
@@ -346,6 +389,8 @@ class StudyPetApp {
     if (phase === 'focus') phaseText = paused ? 'Paused' : 'Focus';
     else if (phase === 'break') phaseText = 'Short Break';
     else if (phase === 'long') phaseText = 'Long Break';
+    if (phase !== 'idle' && awayPaused) phaseText += ' · Paused: person not detected';
+    else if (phase !== 'idle' && paused) phaseText = 'Paused';
     document.getElementById('timerPhase').textContent = phaseText;
 
     // Update cycle info
@@ -353,8 +398,9 @@ class StudyPetApp {
       phase === 'idle' ? 'Not started' : `Cycle ${cycle} / ${cycles}`;
 
     // Update progress bar
-    const total = this.state.timer.total || 1;
-    const progress = ((total - remaining) / total) * 100;
+    const config = this.state.timer;
+    const total = 60 * (phase === 'focus' ? config.focusMin : phase === 'break' ? config.shortMin : phase === 'long' ? config.longMin : 0);
+    const progress = total ? Math.max(0, Math.min(100, ((total - remaining) / total) * 100)) : 0;
     document.getElementById('timerProgress').style.width = `${progress}%`;
 
     // Update button
@@ -372,7 +418,8 @@ class StudyPetApp {
    * Render study session UI
    */
   renderStudy() {
-    const { active, subject, sessionTime } = this.state.study;
+    const { active, subject, awayPaused } = this.state.study;
+    const sessionTime = this.state.study.sessionTime + (active && !awayPaused ? this.displayElapsed(this.studyReceivedAt) : 0);
 
     const hours = Math.floor(sessionTime / 3600);
     const minutes = Math.floor((sessionTime % 3600) / 60);
@@ -382,7 +429,7 @@ class StudyPetApp {
       `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 
     document.getElementById('sessionSubject').textContent =
-      active ? this.subjects[subject] : 'Not studying';
+      active ? this.subjects[subject] + (awayPaused ? ' · Paused: person not detected' : '') : 'Not studying';
 
     const btn = document.getElementById('studyStartStop');
     btn.textContent = active ? 'Stop Session' : 'Start Session';
@@ -454,7 +501,7 @@ class StudyPetApp {
 
       const item = document.createElement('div');
       item.className = `deadline-item ${status}`;
-      item.onclick = () => this.editDeadline(index);
+      item.onclick = () => this.editDeadline(deadline.index);
 
       const dueDate = new Date(deadline.due * 1000);
       const dueDateStr = dueDate.toLocaleString();
@@ -478,10 +525,12 @@ class StudyPetApp {
    * Render pet customization
    */
   renderPet() {
+    if (this.dirty.pet) return;
     const { species, palette } = this.state.pet;
     const speciesData = this.petSpecies[species];
 
     document.getElementById('petSpecies').value = species;
+    this.updatePetPaletteOptions();
     document.getElementById('petPalette').value = palette;
 
     document.querySelector('.pet-placeholder').textContent = speciesData.emoji;
@@ -493,6 +542,7 @@ class StudyPetApp {
    * Render settings
    */
   renderSettings() {
+    if (this.dirty.settings) return;
     const s = this.state.settings;
 
     document.getElementById('buzzerEnabled').checked = s.buzzerEnabled;
@@ -502,6 +552,15 @@ class StudyPetApp {
     document.getElementById('repeatAlert').value = s.repeatIdx;
     document.getElementById('brightness').value = s.brightness;
     document.getElementById('brightnessValue').textContent = s.brightness;
+    document.getElementById('tofPort').value = s.tofPort === undefined ? 1 : s.tofPort;
+  }
+
+  renderDeviceStatus() {
+    const states = ['empty', 'saved', 'backup recovered', 'corrupt', 'I/O error', 'not initialized'];
+    document.getElementById('eepromStatus').textContent = states[this.state.eepromState] || 'Unknown';
+    const range = this.state.range;
+    document.getElementById('rangeStatus').textContent = !range ? 'Unknown' : !range.enabled ? 'Disabled' :
+      `${range.valid ? range.millimeters + ' mm' : 'No valid reading'} · ${range.present ? 'Person detected' : 'Person not detected'} (limit ${range.cutoffMm} mm)`;
   }
 
   /**
@@ -552,6 +611,7 @@ class StudyPetApp {
     };
 
     await this.ble.setTimerConfig(config);
+    this.dirty.timer = false;
     this.showToast('Timer configuration saved', 'success');
   }
 
@@ -601,12 +661,15 @@ class StudyPetApp {
       title.textContent = 'Edit Deadline';
       deleteBtn.classList.remove('hidden');
 
-      const deadline = this.state.deadlines[index];
+      const deadline = this.state.deadlines.find(d => d.index === index);
+      if (!deadline) { this.editingDeadlineIndex = -1; return; }
+      this.deadlineSnapshot = JSON.stringify(deadline);
       document.getElementById('deadlineSubject').value = deadline.subject;
       document.getElementById('deadlineKind').value = deadline.kind;
       document.getElementById('deadlineDue').value = this.epochToDatetimeLocal(deadline.due);
       document.getElementById('deadlineRemind').value = deadline.lead;
     } else {
+      this.deadlineSnapshot = null;
       title.textContent = 'New Deadline';
       deleteBtn.classList.add('hidden');
 
@@ -627,6 +690,7 @@ class StudyPetApp {
   closeDeadlineModal() {
     document.getElementById('deadlineModal').classList.add('hidden');
     this.editingDeadlineIndex = -1;
+    this.deadlineSnapshot = null;
   }
 
   async saveDeadline() {
@@ -641,6 +705,7 @@ class StudyPetApp {
       due: this.datetimeLocalToEpoch(document.getElementById('deadlineDue').value),
       lead: parseInt(document.getElementById('deadlineRemind').value)
     };
+    if (!Number.isFinite(deadline.due)) throw new Error('Choose a valid deadline date and time');
 
     if (this.editingDeadlineIndex >= 0) {
       await this.ble.updateDeadline(this.editingDeadlineIndex, deadline);
@@ -652,8 +717,7 @@ class StudyPetApp {
 
     this.closeDeadlineModal();
 
-    // Refresh deadlines
-    await this.delay(200);
+    // Success appears only after the firmware confirms the EEPROM write.
     await this.ble.getDeadlines();
   }
 
@@ -673,7 +737,6 @@ class StudyPetApp {
       this.closeDeadlineModal();
 
       // Refresh deadlines
-      await this.delay(200);
       await this.ble.getDeadlines();
     }
   }
@@ -710,6 +773,7 @@ class StudyPetApp {
     const palette = parseInt(document.getElementById('petPalette').value);
 
     await this.ble.setPet(species, palette);
+    this.dirty.pet = false;
     this.showToast('Pet customization saved', 'success');
   }
 
@@ -739,10 +803,12 @@ class StudyPetApp {
       irPausesTimer: document.getElementById('irPausesTimer').checked,
       awayIdx: parseInt(document.getElementById('awayDelay').value),
       repeatIdx: parseInt(document.getElementById('repeatAlert').value),
-      brightness: parseInt(document.getElementById('brightness').value)
+      brightness: parseInt(document.getElementById('brightness').value),
+      tofPort: parseInt(document.getElementById('tofPort').value)
     };
 
     await this.ble.setSettings(settings);
+    this.dirty.settings = false;
     this.showToast('Settings saved', 'success');
   }
 
@@ -755,35 +821,62 @@ class StudyPetApp {
     await this.ble.testBuzzer();
   }
 
-  async refreshAllData() {
+  async refreshAllData(silent = false) {
     if (!this.ble.connected) {
       this.showToast('Device not connected', 'warning');
       return;
     }
 
-    await this.ble.requestState();
-    await this.delay(100);
-    await this.ble.getDeadlines();
-    await this.delay(100);
-    await this.ble.getStudyHours();
+    if (this.refreshPromise) return this.refreshPromise;
+    this.refreshPromise = (async () => {
+      await this.ble.requestState();
+      await this.ble.getDeadlines();
+      await this.ble.getStudyHours();
+      if (!silent) this.showToast('Data refreshed', 'success');
+    })();
+    try { await this.refreshPromise; }
+    finally { this.refreshPromise = null; }
+  }
 
-    this.showToast('Data refreshed', 'success');
+  async runAction(action, refresh = true) {
+    if (this.actionBusy || this.syncing) { this.showToast('Please wait for device synchronization', 'info'); return; }
+    this.actionBusy = true;
+    try {
+      await action();
+      if (refresh && this.ble.connected) {
+        // Finish any older poll, then fetch a fresh snapshot AFTER the mutation.
+        if (this.refreshPromise) await this.refreshPromise;
+        await this.refreshAllData(true);
+      }
+    } catch (error) {
+      this.showToast(error.message, 'error');
+    } finally { this.actionBusy = false; }
+  }
+
+  scheduleRefresh() {
+    clearTimeout(this.updateInterval);
+    this.updateInterval = setTimeout(async () => {
+      if (!this.ble.connected) return;
+      try {
+        if (!this.actionBusy && !this.ble.busy && !document.hidden) await this.refreshAllData(true);
+      } catch (error) { this.showToast('Device sync failed: ' + error.message, 'error'); }
+      finally { if (this.ble.connected) this.scheduleRefresh(); }
+    }, 8000);
+  }
+
+  displayElapsed(receivedAt) {
+    const elapsed = Date.now() - receivedAt;
+    // Stop estimating if telemetry goes stale or the connection is lost.
+    return this.ble.connected && elapsed >= 0 && elapsed <= 7000 ? Math.floor(elapsed / 1000) : 0;
   }
 
   /**
-   * Local timer for UI updates (counts down even when disconnected)
+   * Smooth recent device telemetry without advancing paused/disconnected clocks.
    */
   startLocalTimer() {
     setInterval(() => {
-      if (this.state.timer.remaining > 0 && !this.state.timer.paused) {
-        this.state.timer.remaining = Math.max(0, this.state.timer.remaining - 1);
-        this.renderTimer();
-      }
-
-      if (this.state.study.active) {
-        this.state.study.sessionTime++;
-        this.renderStudy();
-      }
+      this.renderTimer();
+      this.renderStudy();
     }, 1000);
   }
 
@@ -859,10 +952,11 @@ class StudyPetApp {
 }
 
 // Initialize app when DOM is ready
-if (document.readyState === 'loading') {
+if (typeof module !== 'undefined') module.exports = StudyPetApp;
+if (typeof document !== 'undefined' && document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
     window.app = new StudyPetApp();
   });
-} else {
+} else if (typeof document !== 'undefined') {
   window.app = new StudyPetApp();
 }

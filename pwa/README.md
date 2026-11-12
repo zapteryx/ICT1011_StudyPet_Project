@@ -1,5 +1,10 @@
 # StudyPet Companion PWA
 
+**ASD2116 integration updated to v1.1.** Deploy this project folder's corrected
+PWA, then reload the phone's installed app/cache once. See [SYNC_FIX.md](SYNC_FIX.md)
+for exact steps, the current firmware contract and test results. The original
+setup notes below are retained as background; use the updated guide first.
+
 A Progressive Web App that communicates with your StudyPet TinyCircuit device via Bluetooth Low Energy (BLE). Control timers, track study sessions, manage deadlines, and customize your pet from your phone.
 
 ## Features
@@ -48,7 +53,8 @@ The TinyCircuit firmware needs to implement BLE UART service with the following 
 - **TX Characteristic**: `6e400002-b5a3-f393-e0a9-e50e24dcca9e` (Write)
 - **RX Characteristic**: `6e400003-b5a3-f393-e0a9-e50e24dcca9e` (Notify)
 
-See `FIRMWARE.md` for Arduino implementation details.
+Use [the current ASD2116 BLE contract](../docs/BLE.md). The original `FIRMWARE.md`
+is a historical design reference; BLE is already implemented in this project.
 
 ### Icons
 

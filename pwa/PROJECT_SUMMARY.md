@@ -1,5 +1,8 @@
 # StudyPet PWA - Project Summary
 
+> Original PWA design summary. See [SYNC_FIX.md](SYNC_FIX.md) for the implemented
+> ASD2116 integration, deployment instructions and verification limits.
+
 ## ✅ What's Been Created
 
 A complete Progressive Web App for controlling your StudyPet TinyCircuit device via Bluetooth LE.

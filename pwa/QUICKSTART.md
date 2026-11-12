@@ -1,5 +1,9 @@
 # StudyPet PWA - Quick Start Guide
 
+> Use [SYNC_FIX.md](SYNC_FIX.md) for this project's corrected deployment steps.
+> Phone access needs HTTPS; `localhost` on a phone refers to the phone itself.
+> The original local-server example below applies to the computer serving it.
+
 ## What You've Built
 
 A Progressive Web App that connects to your StudyPet TinyCircuit device via Bluetooth Low Energy. Control everything from your phone!
