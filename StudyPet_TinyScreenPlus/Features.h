@@ -5,6 +5,9 @@
 #include <string.h>
 #include <stdlib.h>
 #include "Input.h"
+#if USE_WIRELING_ADAPTER
+#include <Wireling.h>
+#endif
 
 // =====================================================================
 //  USER-EDITABLE LISTS
@@ -312,9 +315,9 @@ public:
   }
   TimerEvent skip() { return (phase_ == PHASE_IDLE) ? TEV_NONE : advance(); }
 
-  // Set by the IR presence logic. Only holds FOCUS time - breaks keep
-  // counting down while you are away (that's what breaks are for).
-  void setAutoPaused(bool p) { autoPaused_ = p; }
+  // TOF presence holds every countdown phase. Legacy sensors can keep breaks
+  // running by using the default allPhases=false argument.
+  void setAutoPaused(bool p, bool allPhases = false) { autoPaused_ = p; autoPauseBreaks_ = allPhases; }
 
   TimerEvent update(unsigned long now) {
     const unsigned long elapsed = now - lastTick_;
@@ -326,9 +329,9 @@ public:
   }
 
   bool counting() const {
-    return phase_ != PHASE_IDLE && !userPaused_ && !(autoPaused_ && phase_ == PHASE_FOCUS);
+    return phase_ != PHASE_IDLE && !userPaused_ && !(autoPaused_ && (phase_ == PHASE_FOCUS || autoPauseBreaks_));
   }
-  bool awayHeld() const { return phase_ == PHASE_FOCUS && !userPaused_ && autoPaused_; }
+  bool awayHeld() const { return phase_ != PHASE_IDLE && !userPaused_ && autoPaused_ && (phase_ == PHASE_FOCUS || autoPauseBreaks_); }
   bool userPaused() const { return userPaused_; }
   bool onBreak() const { return phase_ == PHASE_SHORT_BREAK || phase_ == PHASE_LONG_BREAK; }
   TimerPhase phase() const { return phase_; }
@@ -345,6 +348,7 @@ private:
   uint8_t cycle_ = 1;
   bool userPaused_ = false;
   bool autoPaused_ = false;
+  bool autoPauseBreaks_ = false;
   uint32_t remainingMs_ = 0;
   unsigned long lastTick_ = 0;
 
@@ -622,8 +626,7 @@ public:
     settings.repeatIdx = 2;  // 30 min
     settings.brightness = 10;
 #if USE_WIRELING_ADAPTER
-    pinMode(WIRELING_POWER_PIN, OUTPUT);
-    digitalWrite(WIRELING_POWER_PIN, HIGH);
+    Wireling.begin();
 #endif
     buzzer.begin(BUZZER_PIN, BUZZER_PASSIVE != 0);
     presence.begin(IR_SENSOR_PIN, IR_ACTIVE_LEVEL, IR_USE_PULLUP != 0, now);
@@ -648,7 +651,7 @@ public:
     presence.update(now);
     const bool present = presence.present();
     study.setPresent(present);
-    timer.setAutoPaused(settings.irPausesTimer && !present);
+    timer.setAutoPaused(settings.irPausesTimer && !present, PRESENCE_USE_TOF != 0);
 
     const TimerEvent ev = timer.update(now);
     if (ev != TEV_NONE) onTimerEvent(ev, now);

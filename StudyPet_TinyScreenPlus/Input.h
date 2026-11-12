@@ -34,14 +34,47 @@
 #define IR_USE_PULLUP 0        // set to 1 for open-collector sensor outputs
 #endif
 
-// If the buzzer / sensor are plugged into a TinyCircuits Wireling Adapter,
-// the adapter's port power must be switched on at boot. Set to 1 and check
-// WIRELING_POWER_PIN against your adapter's documentation.
+// Your TinyScreen+ uses the ASD2022 Wireling Adapter. Wireling.begin() powers
+// it and initializes its I2C multiplexer. Set to 0 for directly wired parts.
 #ifndef USE_WIRELING_ADAPTER
-#define USE_WIRELING_ADAPTER 0
+#define USE_WIRELING_ADAPTER 1
 #endif
-#ifndef WIRELING_POWER_PIN
-#define WIRELING_POWER_PIN 4
+
+// IR_SENSOR_PIN is ONLY for a digital IR/PIR sensor. A thermal camera needs
+// its own I2C driver and Wireling.selectPort(port); digitalRead(A1) cannot
+// read temperatures or establish that a person is present.
+#ifndef IR_USE_THERMAL_CAMERA
+#define IR_USE_THERMAL_CAMERA 0  // optional legacy AST1045 mode
+#endif
+#ifndef PRESENCE_USE_TOF
+#define PRESENCE_USE_TOF 1 // AST1024 / VL53L0X replaces the thermal camera
+#endif
+#ifndef TOF_SENSOR_PORT
+#define TOF_SENSOR_PORT 1 // adapter socket number, not the A1 GPIO value
+#endif
+#ifndef TOF_PRESENCE_MAX_MM
+#define TOF_PRESENCE_MAX_MM 1000 // exactly 1 metre, inclusive
+#endif
+#if PRESENCE_USE_TOF
+#include "DistanceSensor.h"
+#endif
+#ifndef THERMAL_CAMERA_PORT
+#define THERMAL_CAMERA_PORT 1  // adapter socket number, NOT the A1 GPIO value
+#endif
+#ifndef THERMAL_MIN_QUARTER_C
+#define THERMAL_MIN_QUARTER_C 112  // 28 C
+#endif
+#ifndef THERMAL_MAX_QUARTER_C
+#define THERMAL_MAX_QUARTER_C 160  // 40 C
+#endif
+#ifndef THERMAL_CONTRAST_QUARTER_C
+#define THERMAL_CONTRAST_QUARTER_C 10  // 2.5 C above median background
+#endif
+#ifndef THERMAL_MIN_PIXELS
+#define THERMAL_MIN_PIXELS 3
+#endif
+#if IR_USE_THERMAL_CAMERA && !PRESENCE_USE_TOF
+#include "ThermalCamera.h"
 #endif
 
 // =====================================================================
@@ -180,10 +213,11 @@ private:
 };
 
 // =====================================================================
-//  IR / PIR PRESENCE SENSOR
+//  PRESENCE SENSOR: AST1024 TOF by default; legacy thermal/digital optional.
 //  - Detection must be stable for CONFIRM_MS before it counts (filters
 //    glitches).
-//  - The user is only considered AWAY after `timeout` ms with no
+//  - TOF: > 1 m / invalid data immediately counts as AWAY. No old timeout.
+//  - Legacy sensors: the user is only considered AWAY after `timeout` ms with no
 //    detection. PIR sensors report MOTION, not presence, so someone
 //    sitting very still can drop out briefly; a timeout of 1-2 min is a
 //    good starting point for PIR. Reflective IR boards can use less.
@@ -195,8 +229,22 @@ public:
   void begin(uint8_t pin, uint8_t activeLevel, bool pullup, unsigned long now) {
     pin_ = pin;
     activeLevel_ = activeLevel;
+#if PRESENCE_USE_TOF
+    (void)pullup;
+#if !USE_WIRELING_ADAPTER
+    Wire.begin();
+#endif
+    distance.begin(now);
+#elif IR_USE_THERMAL_CAMERA
+    (void)pullup;
+#if !USE_WIRELING_ADAPTER
+    Wire.begin();
+#endif
+    camera.begin(now);
+#else
     pinMode(pin_, pullup ? INPUT_PULLUP : INPUT);
-    present_ = true;  // assume the user is at the desk at power-up
+#endif
+    present_ = !PRESENCE_USE_TOF; // TOF waits for a confirmed nearby target
     lastSeen_ = now;
     detectSince_ = now;
     rawDetect_ = false;
@@ -204,8 +252,10 @@ public:
 
   void setEnabled(bool on, unsigned long now) {
     enabled_ = on;
-    present_ = true;
+    present_ = !on || !PRESENCE_USE_TOF;
     lastSeen_ = now;
+    rawDetect_ = false;
+    detectSince_ = now;
   }
 
   void setAbsentTimeout(unsigned long ms) { timeoutMs_ = ms; }
@@ -218,7 +268,27 @@ public:
       rawDetect_ = false;
       return before != present_;
     }
+#if PRESENCE_USE_TOF
+    distance.update(now);
+    const bool detect = distance.valid() && distance.millimeters() <= TOF_PRESENCE_MAX_MM;
+    if (detect && !rawDetect_) detectSince_ = now;
+    rawDetect_ = detect;
+    if (!detect) present_ = false; // no old away timeout beyond 1 metre
+    else if ((unsigned long)(now - detectSince_) >= CONFIRM_MS) present_ = true;
+    return before != present_;
+#elif IR_USE_THERMAL_CAMERA
+    camera.update(now);
+    if (!camera.valid() || camera.warming()) {
+      // Missing/error/warming camera is unknown, not proof of absence.
+      // Keep timers usable and expose the problem in Settings.
+      present_ = true; lastSeen_ = now; rawDetect_ = false;
+      return before != present_;
+    }
+    const bool detect = camera.warmTarget();
+#else
     const bool detect = (digitalRead(pin_) == activeLevel_);
+#endif
+#if !PRESENCE_USE_TOF
     if (detect && !rawDetect_) detectSince_ = now;
     rawDetect_ = detect;
 
@@ -229,11 +299,17 @@ public:
       present_ = false;
     }
     return before != present_;
+#endif
   }
 
   bool present() const { return present_; }
   bool enabled() const { return enabled_; }
   bool rawDetect() const { return rawDetect_; }
+#if PRESENCE_USE_TOF
+  DistanceSensor distance;
+#elif IR_USE_THERMAL_CAMERA
+  ThermalCamera camera;
+#endif
 
 private:
   uint8_t pin_ = IR_SENSOR_PIN;

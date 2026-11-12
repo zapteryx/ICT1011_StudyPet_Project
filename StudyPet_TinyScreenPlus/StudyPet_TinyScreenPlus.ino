@@ -1,12 +1,15 @@
 /*
   StudyPet - TinyScreen+ study companion
-  Hardware: TinyCircuits TinyScreen+ (ATSAMD21) + optional piezo buzzer and
-  IR / PIR presence sensor. Pin definitions live at the top of Input.h
+  Hardware: TinyScreen+ (ATSAMD21), ASD2022 Wireling Adapter, AST1035 buzzer
+  on port 0 (A0), AST1024 TOF distance sensor on port 1 (I2C). Definitions in Input.h
   (override them here, ABOVE the #includes, if your wiring differs):
 
     // #define BUZZER_PIN      A0
     // #define IR_SENSOR_PIN   A1
     // #define IR_ACTIVE_LEVEL HIGH
+    // #define TOF_SENSOR_PORT 1
+    // #define TOF_PRESENCE_MAX_MM 1000
+    // #define PRESENCE_USE_TOF 0 // only if switching back to a legacy sensor
 
   Button mapping (screen upright):
     Top Left  = BACK        Top Right    = UP

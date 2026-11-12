@@ -1,6 +1,8 @@
 // Desktop UI regression + pixel preview harness. No hardware upload occurs.
 // Compile with this directory first on the include path, then the installed
 // TinyScreen library directory (for its actual font.h bitmap data).
+#define IR_USE_THERMAL_CAMERA 0 // legacy digital presence; thermal tests are separate
+#define PRESENCE_USE_TOF 0
 #include "Arduino.h"
 #include "TinyScreen.h"
 #define private public
@@ -44,6 +46,9 @@ static void snapshot(const char *name) {
 int main(int argc, char **argv) {
   assert(argc == 2); outputDir = argv[1];
   features.begin(now); pet.begin(now); ui.begin(display, now);
+#if USE_WIRELING_ADAPTER
+  CHECK(Wireling.beginCalls == 1);
+#endif
   features.settings.irEnabled = false; features.applySettings(now); tick();
   snapshot("01_home");
   press(KEY_UP); CHECK(pet.actionActive());

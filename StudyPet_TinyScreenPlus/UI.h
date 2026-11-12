@@ -31,7 +31,7 @@ enum Screen : uint8_t {
 
 enum ValueTarget : uint8_t {
   VT_NONE = 0, VT_FOCUS, VT_SHORT, VT_LONG, VT_CYCLES,
-  VT_DL_SUBJECT, VT_DL_KIND, VT_DL_LEAD, VT_AWAY, VT_REPEAT, VT_BRIGHT
+  VT_DL_SUBJECT, VT_DL_KIND, VT_DL_LEAD, VT_AWAY, VT_REPEAT, VT_BRIGHT, VT_SENSOR_PORT
 };
 enum DateTarget : uint8_t { DT_CLOCK = 0, DT_DEADLINE };
 enum ConfirmTarget : uint8_t { CF_NONE = 0, CF_DELETE_DEADLINE, CF_RESET_TOTALS };
@@ -348,6 +348,17 @@ private:
     hintRow(d, 7, 59, bl, br);
   }
 
+#if PRESENCE_USE_TOF
+  static void formatDistance(char *b, size_t n, const FeatureManager &f) {
+    if (!f.settings.irEnabled) snprintf(b, n, "Range: off");
+    else if (!f.presence.distance.valid()) snprintf(b, n, "Range: -- cm");
+    else {
+      const uint16_t mm = f.presence.distance.millimeters();
+      snprintf(b, n, "Range: %u.%u cm", mm / 10, mm % 10);
+    }
+  }
+#endif
+
   static void fmtClock(char *b, size_t n, uint32_t epoch) {
     const DateTime t = TimeUtil::fromEpoch(epoch);
     snprintf(b, n, "%02u:%02u", t.hour, t.minute);
@@ -494,8 +505,16 @@ private:
       else { snprintf(b, n, "!%s %s", nm, rel); bg = UI_WARN; }
       return;
     }
+    // Display real range on home too; active session time alternates with it.
+#if PRESENCE_USE_TOF
+    if (f.settings.irEnabled && (!session || ((now / 4000UL) % 2UL) == 0)) {
+      formatDistance(b, n, f);
+      bg = f.presence.present() ? UI_GOOD : UI_PAUSE;
+      return;
+    }
+#endif
     if (session) {
-      if (f.study.awayPaused()) { snprintf(b, n, "Away: IR paused"); bg = UI_PAUSE; }
+      if (f.study.awayPaused()) { snprintf(b, n, "Away: paused"); bg = UI_PAUSE; }
       else {
         const uint32_t s = f.study.sessionSeconds();
         snprintf(b, n, "%s %lu:%02lu:%02lu", SUBJECT_NAMES[f.study.subject()], (unsigned long)(s / 3600UL),
@@ -505,7 +524,7 @@ private:
       return;
     }
     if (f.timer.awayHeld()) {
-      snprintf(b, n, "Check Settings > IR"); bg = UI_PAUSE;
+      snprintf(b, n, "Check sensor range"); bg = UI_PAUSE;
       return;
     }
     bg = UI_BG;
@@ -576,7 +595,7 @@ private:
       case SCR_DEADLINES: return 1 + f.deadlines.count();
       case SCR_DL_EDIT: return dlEditIndex_ < 0 ? 5 : 6;
       case SCR_PET: return 2;
-      case SCR_SETTINGS: return 9;
+      case SCR_SETTINGS: return (PRESENCE_USE_TOF || IR_USE_THERMAL_CAMERA) ? 12 : 9;
       case SCR_CONFIRM: return 2;
       default: return 0;
     }
@@ -592,7 +611,7 @@ private:
           fmtMMSS(t, sizeof t, f.timer.remainingSeconds());
           const char *ph = f.timer.phase() == PHASE_FOCUS ? "F" : f.timer.phase() == PHASE_SHORT_BREAK ? "B" : "L";
           if (f.timer.userPaused()) snprintf(b, n, "PAUSED %s", t);
-          else if (f.timer.awayHeld()) snprintf(b, n, "IR HOLD %s", t);
+          else if (f.timer.awayHeld()) snprintf(b, n, "AWAY %s", t);
           else snprintf(b, n, "%s %u/%u %s", ph, f.timer.cycle(), f.timer.config().cycles, t);
         }
         break;
@@ -679,14 +698,44 @@ private:
         switch (i) {
           case 0: snprintf(b, n, "Set date & time"); break;
           case 1: snprintf(b, n, "Buzzer: %s", st.buzzerEnabled ? "On" : "Off"); break;
-          case 2: snprintf(b, n, "IR sensor: %s", st.irEnabled ? "On" : "Off"); break;
-          case 3: snprintf(b, n, "Away after %s", AWAY_LABELS[st.awayIdx]); break;
-          case 4: snprintf(b, n, "IR->timer: %s", st.irPausesTimer ? "On" : "Off"); break;
+          case 2: snprintf(b, n, "%s: %s", PRESENCE_USE_TOF ? "TOF sensor" : IR_USE_THERMAL_CAMERA ? "Camera" : "IR sensor", st.irEnabled ? "On" : "Off"); break;
+          case 3:
+#if PRESENCE_USE_TOF
+            snprintf(b, n, "Cutoff: %u cm", TOF_PRESENCE_MAX_MM / 10);
+#else
+            snprintf(b, n, "Away after %s", AWAY_LABELS[st.awayIdx]);
+#endif
+            break;
+          case 4: snprintf(b, n, "Away->timer: %s", st.irPausesTimer ? "On" : "Off"); break;
           case 5: snprintf(b, n, "Re-alert: %s", REPEAT_LABELS[st.repeatIdx]); break;
           case 6: snprintf(b, n, "Brightness: %u", st.brightness); break;
           case 7: snprintf(b, n, "Test buzzer"); break;
           default:
+#if PRESENCE_USE_TOF
+            if (i == 8) {
+              const DistanceSensor &sensor = f.presence.distance;
+              snprintf(b, n, "TOF: %s", !st.irEnabled ? "off" : sensor.state() == DistanceSensor::STARTING ? "starting" : sensor.state() == DistanceSensor::SENSOR_ERROR ? "error" : sensor.valid() ? "online" : "no target");
+            } else if (i == 9) {
+              formatDistance(b, n, f);
+            } else if (i == 10) {
+              snprintf(b, n, "Person: %s", !st.irEnabled ? "off" : f.presence.present() ? "detected" : "not seen");
+            } else snprintf(b, n, "TOF port: %u", f.presence.distance.port());
+#elif IR_USE_THERMAL_CAMERA
+            if (i == 8) {
+              snprintf(b, n, "Camera: %s", !st.irEnabled ? "off" : !f.presence.camera.valid() ? "no data" : f.presence.camera.warming() ? "warming" : "online");
+            } else if (i == 9) {
+              if (!st.irEnabled || !f.presence.camera.valid()) snprintf(b, n, "Peak: -- C");
+              else {
+                const int16_t q = f.presence.camera.peakQuarterC();
+                const uint16_t a = q < 0 ? -q : q;
+                snprintf(b, n, "Peak:%s%u.%02u C", q < 0 ? "-" : "", a / 4, (a % 4) * 25);
+              }
+            } else if (i == 10) {
+              snprintf(b, n, "Target: %s", !st.irEnabled || !f.presence.camera.valid() || f.presence.camera.warming() ? "unknown" : f.presence.rawDetect() ? "warm" : "none");
+            } else snprintf(b, n, "Camera port: %u", f.presence.camera.port());
+#else
             snprintf(b, n, "IR now: %s", !st.irEnabled ? "off" : f.presence.rawDetect() ? "SEEN" : "clear");
+#endif
             break;
         }
         break;
@@ -749,7 +798,7 @@ private:
     else if (fr.screen == SCR_SETTINGS) {
       if (fr.cursor == 1 || fr.cursor == 2 || fr.cursor == 4) action = "Toggle";
       else if (fr.cursor == 7) action = "Test";
-      else if (fr.cursor == 8) action = "--";
+      else if ((fr.cursor >= 8 && fr.cursor <= 10) || (PRESENCE_USE_TOF && fr.cursor == 3)) action = "--";
       else action = "Edit";
     } else if (fr.screen == SCR_TIMER) {
       if (fr.cursor == 0) action = f.timer.phase() == PHASE_IDLE ? "Start" : f.timer.userPaused() ? "Resume" : "Pause";
@@ -850,11 +899,20 @@ private:
           case 0: openDate(DT_CLOCK, f.nowEpoch()); break;
           case 1: st.buzzerEnabled = !st.buzzerEnabled; break;
           case 2: st.irEnabled = !st.irEnabled; break;
-          case 3: openValue(VT_AWAY, "AWAY AFTER", st.awayIdx, 0, AWAY_COUNT - 1, 1, AWAY_LABELS, ""); break;
+          case 3:
+#if !PRESENCE_USE_TOF
+            openValue(VT_AWAY, "AWAY AFTER", st.awayIdx, 0, AWAY_COUNT - 1, 1, AWAY_LABELS, "");
+#endif
+            break;
           case 4: st.irPausesTimer = !st.irPausesTimer; break;
           case 5: openValue(VT_REPEAT, "RE-ALERT EVERY", st.repeatIdx, 0, REPEAT_COUNT - 1, 1, REPEAT_LABELS, ""); break;
           case 6: openValue(VT_BRIGHT, "BRIGHTNESS", st.brightness, 1, 15, 1, nullptr, ""); break;
           case 7: f.buzzer.play(BEEP_BREAK_START, now); break;
+#if PRESENCE_USE_TOF
+          case 11: openValue(VT_SENSOR_PORT, "TOF PORT", f.presence.distance.port(), 0, 3, 1, nullptr, ""); break;
+#elif IR_USE_THERMAL_CAMERA
+          case 11: openValue(VT_SENSOR_PORT, "CAMERA PORT", f.presence.camera.port(), 0, 3, 1, nullptr, ""); break;
+#endif
           default: break;
         }
         f.applySettings(now);
@@ -944,6 +1002,11 @@ private:
       case VT_AWAY: f.settings.awayIdx = v; f.applySettings(now); break;
       case VT_REPEAT: f.settings.repeatIdx = v; break;
       case VT_BRIGHT: f.settings.brightness = v; break;
+#if PRESENCE_USE_TOF
+      case VT_SENSOR_PORT: f.presence.distance.setPort(v, now); break;
+#elif IR_USE_THERMAL_CAMERA
+      case VT_SENSOR_PORT: f.presence.camera.setPort(v, now); break;
+#endif
       default: break;
     }
     vt_ = VT_NONE;

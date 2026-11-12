@@ -14,9 +14,12 @@
 #define A1 15
 static unsigned long simulatedMillis = 0;
 static int sensorLevel = LOW;
+static unsigned toneCalls = 0;
+static uint8_t lastTonePin = 0;
+static unsigned lastToneHz = 0;
 inline unsigned long millis() { return simulatedMillis; }
 inline void pinMode(uint8_t, int) {}
 inline void digitalWrite(uint8_t, int) {}
 inline int digitalRead(uint8_t) { return sensorLevel; }
-inline void tone(uint8_t, unsigned int) {}
+inline void tone(uint8_t pin, unsigned int hz) { ++toneCalls; lastTonePin = pin; lastToneHz = hz; }
 inline void noTone(uint8_t) {}
